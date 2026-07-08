@@ -515,7 +515,7 @@ def fill_section4(ws4, wb_dsr, wb_steel, month):
 # =============================================
 # 검증 리포트
 # =============================================
-def verify_report(ws4, df26, df25):
+def verify_report(ws4, df26, df25, section4_available=True):
     """검증 리포트 - 콘솔 + PDF 출력"""
     from reportlab.lib.pagesizes import A4
     from reportlab.pdfgen import canvas
@@ -574,21 +574,25 @@ def verify_report(ws4, df26, df25):
         print(f"  {label:12s}: 셀={cell_val:>10.1f} | 합산={sum_val:>10.1f} | {status}")
 
     y -= 10
-    write("[섹션4 합섬 통합 검증] 통합 vs 한국+중국+비나", size=12, bold=True)
-    print("\n[섹션4 합섬 통합 검증] 통합 vs 한국+중국+비나")
-    for label, (tot_r, sub_rows, col) in [
-        ('합섬매출당월', (116, [119,122,125], 4)),
-        ('합섬이익당월', (117, [120,123,126], 4)),
-        ('합섬매출당해', (116, [119,122,125], 7)),
-        ('스텐매출당월', (128, [131,134],     4)),
-    ]:
-        tot_val = ws4.cell(tot_r, col).value or 0
-        sub_val = sum(ws4.cell(r, col).value or 0 for r in sub_rows)
-        diff = round(abs(tot_val - sub_val), 1)
-        status = "OK" if diff < 1 else f"X 차이={diff}"
-        line = f"  {label:14s}: 통합={tot_val:>10.1f} | 합산={sub_val:>10.1f} | {status}"
-        write(line, size=10, indent=10)
-        print(f"  {label:14s}: 통합={tot_val:>10.1f} | 합산={sub_val:>10.1f} | {status}")
+    if section4_available:
+        write("[섹션4 합섬 통합 검증] 통합 vs 한국+중국+비나", size=12, bold=True)
+        print("\n[섹션4 합섬 통합 검증] 통합 vs 한국+중국+비나")
+        for label, (tot_r, sub_rows, col) in [
+            ('합섬매출당월', (116, [119,122,125], 4)),
+            ('합섬이익당월', (117, [120,123,126], 4)),
+            ('합섬매출당해', (116, [119,122,125], 7)),
+            ('스텐매출당월', (128, [131,134],     4)),
+        ]:
+            tot_val = ws4.cell(tot_r, col).value or 0
+            sub_val = sum(ws4.cell(r, col).value or 0 for r in sub_rows)
+            diff = round(abs(tot_val - sub_val), 1)
+            status = "OK" if diff < 1 else f"X 차이={diff}"
+            line = f"  {label:14s}: 통합={tot_val:>10.1f} | 합산={sub_val:>10.1f} | {status}"
+            write(line, size=10, indent=10)
+            print(f"  {label:14s}: 통합={tot_val:>10.1f} | 합산={sub_val:>10.1f} | {status}")
+    else:
+        write("[섹션4 검증 SKIP] 손익 파일 미수령으로 통합손익요약 검증 제외", size=12, bold=True)
+        print("\n[SKIP] 섹션4 검증 - 손익 파일 미수령")
 
     c.save()
     print(f"\n[완료] 검증 리포트 PDF 저장: {pdf_file}")
@@ -608,8 +612,15 @@ def run():
     wbp   = load_workbook(PLAN_FILE,     data_only=True)
     wbv   = load_workbook(VOL_FILE,      data_only=True)
     wbo   = load_workbook(OVERSEAS_FILE, data_only=True)
-    wb_dsr   = load_workbook(DSR_FILE,   data_only=True)
-    wb_steel = load_workbook(STEEL_FILE, data_only=True)
+    section4_available = os.path.exists(DSR_FILE) and os.path.exists(STEEL_FILE)
+    if section4_available:
+        wb_dsr   = load_workbook(DSR_FILE,   data_only=True)
+        wb_steel = load_workbook(STEEL_FILE, data_only=True)
+    else:
+        missing_files = [name for name in (DSR_FILE, STEEL_FILE) if not os.path.exists(name)]
+        print(f"[SKIP] 섹션4 통합손익요약 - 손익 파일 미수령: {', '.join(missing_files)}")
+        wb_dsr = None
+        wb_steel = None
     wb4   = load_workbook(OUTPUT_FILE)
 
     wsp    = wbp.worksheets[0]
@@ -627,7 +638,10 @@ def run():
     fill_section1(ws4, wsp, df26, df25, MONTH)
     fill_section2(ws4, ws_hs, ws_st, ws_jg, ws_cd, ws_vn, ws_dc, df26, df25, MONTH)
     fill_section3(ws4, ws_hs, ws_st, ws_jg, wbo, df26, df25, MONTH)
-    fill_section4(ws4, wb_dsr, wb_steel, MONTH)
+    if section4_available:
+        fill_section4(ws4, wb_dsr, wb_steel, MONTH)
+    else:
+        print(f"[SKIP] 섹션4")
 
     print(f"\n[SKIP] 섹션1 기타매출(E/H/J) → 수동 입력")
     print(f"[SKIP] 환율(C15) → 수동 입력")
@@ -636,7 +650,7 @@ def run():
 
     # 검증
     wb4_check = load_workbook(OUTPUT_FILE, data_only=True)
-    verify_report(wb4_check.worksheets[0], df26, df25)
+    verify_report(wb4_check.worksheets[0], df26, df25, section4_available=section4_available)
 
 # ── 코멘트 자동 생성 ──────────────────────────────────────
     from comment_generator import generate_full_report, generate_full_report_with_customers, load_customer_data
