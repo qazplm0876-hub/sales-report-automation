@@ -30,48 +30,105 @@
 """
 
 from openpyxl import load_workbook
+import argparse
+import os
 import pandas as pd
 import shutil
 
-# =============================================
-# ★ 매월 여기만 수정 ★
-# =============================================
-MONTH = 5   # 당월 (4=4월, 5=5월, ...)
-PREV_MONTH = f"2026{MONTH-1:02d}"   # 전월 요청월 키 (예: 202603)
-CURR_MONTH = f"2026{MONTH:02d}"     # 당월 요청월 키 (예: 202604)
-PREV2_MONTH = f"2026{MONTH-2:02d}"  # 전전월 요청월 키 (예: 202602)
 
-# 파일 경로
-TEMPLATE_FILE  = f"사업계획대비_매출실적분석_26년_{MONTH}월_.xlsx"
-PLAN_FILE      = "월별_사업계획.xlsx"
-VOL_FILE       = "제품판매량_사업계획.xlsx"
-OVERSEAS_FILE  = "2_해외현지내수판매계획_청도_비나_DCV_.xlsx"
-import os
+def _parse_args():
+    parser = argparse.ArgumentParser(description="월별 매출실적분석 보고서 자동 생성")
+    parser.add_argument("--month", "-m", type=int, default=5, help="보고서 대상 월. 예: 6")
+    parser.add_argument("--year", "-y", type=int, default=2026, help="보고서 대상 연도. 기본값: 2026")
+    args = parser.parse_args()
+    if not 1 <= args.month <= 12:
+        parser.error("--month 값은 1부터 12 사이여야 합니다.")
+    return args
+
+
+ARGS = _parse_args()
+MONTH = ARGS.month
+YEAR = ARGS.year
+YEAR_SHORT = str(YEAR)[-2:]
+
+PREV_MONTH = f"{YEAR}{MONTH-1:02d}"   # 전월 요청월 키 (예: 202603)
+CURR_MONTH = f"{YEAR}{MONTH:02d}"     # 당월 요청월 키 (예: 202604)
+PREV2_MONTH = f"{YEAR}{MONTH-2:02d}"  # 전전월 요청월 키 (예: 202602)
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+MONTH_DIR = os.path.join(BASE_DIR, "data", f"{YEAR}-{MONTH:02d}")
+INPUT_DIR = os.path.join(MONTH_DIR, "input")
+CUSTOMER_DIR = os.path.join(INPUT_DIR, "customers")
+OUTPUT_DIR = os.path.join(MONTH_DIR, "output")
+os.makedirs(INPUT_DIR, exist_ok=True)
+os.makedirs(CUSTOMER_DIR, exist_ok=True)
+os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+
+def _candidate_dirs(*extra_dirs):
+    dirs = [d for d in extra_dirs if d]
+    dirs += [INPUT_DIR, BASE_DIR, os.getcwd()]
+    result = []
+    for d in dirs:
+        if d and d not in result:
+            result.append(d)
+    return result
+
+
+def _find_file(filename, *, optional=False, extra_dirs=None):
+    for directory in _candidate_dirs(*(extra_dirs or [])):
+        path = os.path.join(directory, filename)
+        if os.path.exists(path):
+            return path
+    if optional:
+        return os.path.join(INPUT_DIR, filename)
+    raise FileNotFoundError(
+        f"{filename} 파일을 찾을 수 없습니다. 자료를 {INPUT_DIR} 폴더에 넣어주세요."
+    )
+
+
 def _find_raw(pattern_base):
-    for ext in ['.xls', '.xlsx']:
-        if os.path.exists(pattern_base + ext):
-            return pattern_base + ext
-    raise FileNotFoundError(f'{pattern_base}.xls 또는 .xlsx 파일을 찾을 수 없습니다.')
+    for directory in _candidate_dirs():
+        for ext in [".xls", ".xlsx"]:
+            path = os.path.join(directory, pattern_base + ext)
+            if os.path.exists(path):
+                return path
+    raise FileNotFoundError(
+        f"{pattern_base}.xls 또는 .xlsx 파일을 찾을 수 없습니다. 자료를 {INPUT_DIR} 폴더에 넣어주세요."
+    )
+
 
 def _customer_file(name):
     candidates = [
-        os.path.join(os.getcwd(), name),
-        os.path.join(os.path.expanduser('~'), 'Downloads', name),
+        CUSTOMER_DIR,
+        INPUT_DIR,
+        os.path.join(os.path.expanduser("~"), "Downloads"),
     ]
-    for path in candidates:
+    for directory in candidates:
+        path = os.path.join(directory, name)
         if os.path.exists(path):
             return path
-    raise FileNotFoundError(f'{name} 거래처 상세 파일을 찾을 수 없습니다.')
+    raise FileNotFoundError(
+        f"{name} 거래처 상세 파일을 찾을 수 없습니다. {CUSTOMER_DIR} 폴더에 넣어주세요."
+    )
 
-RAW_26_FILE    = _find_raw(f'2026{MONTH}월누계')
-RAW_25_FILE    = _find_raw(f'2025{MONTH}월누계')
-DSR_FILE       = f"DSR_{MONTH:02d}_상원.xlsx"
-STEEL_FILE     = f"제강{MONTH:02d}_상원.xlsx"
-OUTPUT_FILE    = f"사업계획대비_매출실적분석_26년_{MONTH}월_완성_CLAUDE.xlsx"
+
+TEMPLATE_FILE  = _find_file(f"사업계획대비_매출실적분석_{YEAR_SHORT}년_{MONTH}월_.xlsx")
+PLAN_FILE      = _find_file("월별_사업계획.xlsx")
+VOL_FILE       = _find_file("제품판매량_사업계획.xlsx")
+OVERSEAS_FILE  = _find_file("2_해외현지내수판매계획_청도_비나_DCV_.xlsx")
+RAW_26_FILE    = _find_raw(f"{YEAR}{MONTH}월누계")
+RAW_25_FILE    = _find_raw(f"{YEAR-1}{MONTH}월누계")
+DSR_FILE       = _find_file(f"DSR_{MONTH:02d}_상원.xlsx", optional=True)
+STEEL_FILE     = _find_file(f"제강{MONTH:02d}_상원.xlsx", optional=True)
+OUTPUT_FILE    = os.path.join(
+    OUTPUT_DIR,
+    f"사업계획대비_매출실적분석_{YEAR_SHORT}년_{MONTH}월_완성_CLAUDE.xlsx",
+)
 CUSTOMER_FILES = {
-    '합섬': _customer_file('1.xlsx'),
-    '스텐': _customer_file('2.xlsx'),
-    '제강': _customer_file('3.xlsx'),
+    "합섬": _customer_file("1.xlsx"),
+    "스텐": _customer_file("2.xlsx"),
+    "제강": _customer_file("3.xlsx"),
 }
 
 
@@ -523,7 +580,7 @@ def verify_report(ws4, df26, df25, section4_available=True):
     from reportlab.pdfbase.ttfonts import TTFont
     import os
 
-    pdf_file = f"검증리포트_{MONTH}월_CLAUDE.pdf"
+    pdf_file = os.path.join(OUTPUT_DIR, f"검증리포트_{MONTH}월_CLAUDE.pdf")
 
     # 한글 폰트 등록 (Windows 기본 폰트)
     font_name = "Helvetica"  # 기본값
@@ -664,7 +721,7 @@ def run():
     except Exception as e:
         print(f"[경고] 거래처 상세 데이터 반영 실패: {e}")
         report = generate_full_report(df26, months)
-    comment_file = f"코멘트_{MONTH}월.md"
+    comment_file = os.path.join(OUTPUT_DIR, f"코멘트_{MONTH}월.md")
     with open(comment_file, 'w', encoding='utf-8') as f:
         f.write(report)
     print(f"[완료] 코멘트 초안 저장: {comment_file}")

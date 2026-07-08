@@ -12,6 +12,12 @@ outputs/
 raw/
 archive/
 
+# 월별 원자료/결과물은 민감 자료이므로 제외
+data/**
+!data/.gitkeep
+!data/**/
+!data/**/.gitkeep
+
 # 파이썬/편집기 임시 파일
 __pycache__/
 *.pyc
@@ -21,4 +27,3 @@ __pycache__/
 
 # 엑셀 잠금 파일
 ~$*
-
