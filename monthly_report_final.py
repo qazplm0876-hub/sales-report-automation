@@ -75,11 +75,25 @@ def _candidate_dirs(*extra_dirs):
     return result
 
 
-def _find_file(filename, *, optional=False, extra_dirs=None):
+def _normalize_filename(name):
+    root, ext = os.path.splitext(os.path.basename(name))
+    keep = "".join(ch for ch in root.lower() if ch.isalnum())
+    return keep + ext.lower()
+
+
+def _find_file(filename, *, optional=False, extra_dirs=None, aliases=None):
+    names = [filename] + list(aliases or [])
     for directory in _candidate_dirs(*(extra_dirs or [])):
-        path = os.path.join(directory, filename)
-        if os.path.exists(path):
-            return path
+        for name in names:
+            path = os.path.join(directory, name)
+            if os.path.exists(path):
+                return path
+        expected = {_normalize_filename(name) for name in names}
+        if os.path.isdir(directory):
+            for entry in os.listdir(directory):
+                path = os.path.join(directory, entry)
+                if os.path.isfile(path) and _normalize_filename(entry) in expected:
+                    return path
     if optional:
         return os.path.join(INPUT_DIR, filename)
     raise FileNotFoundError(
@@ -113,10 +127,22 @@ def _customer_file(name):
     )
 
 
-TEMPLATE_FILE  = _find_file(f"사업계획대비_매출실적분석_{YEAR_SHORT}년_{MONTH}월_.xlsx")
-PLAN_FILE      = _find_file("월별_사업계획.xlsx")
-VOL_FILE       = _find_file("제품판매량_사업계획.xlsx")
-OVERSEAS_FILE  = _find_file("2_해외현지내수판매계획_청도_비나_DCV_.xlsx")
+TEMPLATE_FILE  = _find_file(
+    f"사업계획대비_매출실적분석_{YEAR_SHORT}년_{MONTH}월_.xlsx",
+    aliases=[
+        f"사업계획대비매출실적분석 ({YEAR_SHORT}년 {MONTH}월).xlsx",
+        f"사업계획대비 매출실적분석 {YEAR_SHORT}년 {MONTH}월.xlsx",
+    ],
+)
+PLAN_FILE      = _find_file("월별_사업계획.xlsx", aliases=["월별 사업계획.xlsx"])
+VOL_FILE       = _find_file("제품판매량_사업계획.xlsx", aliases=["제품판매량 사업계획.xlsx"])
+OVERSEAS_FILE  = _find_file(
+    "2_해외현지내수판매계획_청도_비나_DCV_.xlsx",
+    aliases=[
+        "2.해외현지내수판매계획(청도,비나,DCV).xlsx",
+        "2 해외현지내수판매계획 청도 비나 DCV.xlsx",
+    ],
+)
 RAW_26_FILE    = _find_raw(f"{YEAR}{MONTH}월누계")
 RAW_25_FILE    = _find_raw(f"{YEAR-1}{MONTH}월누계")
 DSR_FILE       = _find_file(f"DSR_{MONTH:02d}_상원.xlsx", optional=True)
