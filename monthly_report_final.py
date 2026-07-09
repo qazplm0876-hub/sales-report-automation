@@ -127,6 +127,20 @@ def _customer_file(name):
     )
 
 
+def _optional_customer_file(*names):
+    candidates = [
+        CUSTOMER_DIR,
+        INPUT_DIR,
+        os.path.join(os.path.expanduser("~"), "Downloads"),
+    ]
+    for directory in candidates:
+        for name in names:
+            path = os.path.join(directory, name)
+            if os.path.exists(path):
+                return path
+    return None
+
+
 TEMPLATE_FILE  = _find_file(
     f"사업계획대비_매출실적분석_{YEAR_SHORT}년_{MONTH}월_.xlsx",
     aliases=[
@@ -152,9 +166,18 @@ OUTPUT_FILE    = os.path.join(
     f"사업계획대비_매출실적분석_{YEAR_SHORT}년_{MONTH}월_완성_CLAUDE.xlsx",
 )
 CUSTOMER_FILES = {
-    "합섬": _customer_file("1.xlsx"),
-    "스텐": _customer_file("2.xlsx"),
-    "제강": _customer_file("3.xlsx"),
+    "합섬": {
+        "수출": _customer_file("1.xlsx"),
+        "내수": _optional_customer_file("1_내수.xlsx", "내수_1.xlsx", "1내수.xlsx", "합섬_내수.xlsx", "합섬내수.xlsx"),
+    },
+    "스텐": {
+        "수출": _customer_file("2.xlsx"),
+        "내수": _optional_customer_file("2_내수.xlsx", "내수_2.xlsx", "2내수.xlsx", "스텐_내수.xlsx", "스텐내수.xlsx"),
+    },
+    "제강": {
+        "수출": _customer_file("3.xlsx"),
+        "내수": _optional_customer_file("3_내수.xlsx", "내수_3.xlsx", "3내수.xlsx", "제강_내수.xlsx", "제강내수.xlsx"),
+    },
 }
 
 
@@ -743,9 +766,9 @@ def run():
     try:
         cdf = load_customer_data(CUSTOMER_FILES)
         report = generate_full_report_with_customers(df26, cdf, months)
-        print("[완료] 거래처 상세 데이터 반영")
+        print("[완료] END USER 상세 데이터 반영")
     except Exception as e:
-        print(f"[경고] 거래처 상세 데이터 반영 실패: {e}")
+        print(f"[경고] END USER 상세 데이터 반영 실패: {e}")
         report = generate_full_report(df26, months)
     comment_file = os.path.join(OUTPUT_DIR, f"코멘트_{MONTH}월.md")
     with open(comment_file, 'w', encoding='utf-8') as f:

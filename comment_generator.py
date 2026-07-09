@@ -259,7 +259,7 @@ def generate_full_report(df, months):
         c = generate_comment(df, 부문, months)
         lines.append(f"- **{부문}** : {c['내수']}")
 
-    lines += ["\n---", "> ⚠️ 자동 생성된 초안입니다. 거래처·기저효과 맥락을 추가해 주세요."]
+    lines += ["\n---", "> ⚠️ 자동 생성된 초안입니다. END USER·기저효과 맥락을 추가해 주세요."]
     return "\n".join(lines)
 
 
@@ -289,22 +289,44 @@ if __name__ == "__main__":
 # ── 거래처 분석 (출고 상세 데이터용) ─────────────────────────────
 def load_customer_data(filepaths):
     """
-    1.xlsx(합섬), 2.xlsx(스텐), 3.xlsx(제강) 로드 및 전처리
-    filepaths: dict {'합섬': path, '스텐': path, '제강': path}
-                또는 list [path1, path2, path3] (합섬/스텐/제강 순)
+    출고 상세 데이터 로드 및 전처리.
+    기본 파일명:
+      - 수출: 1.xlsx(합섬), 2.xlsx(스텐), 3.xlsx(제강)
+      - 내수: 1_내수.xlsx, 2_내수.xlsx, 3_내수.xlsx 또는 부문명_내수.xlsx
+    END USER는 AB열의 '인수처명'을 기준으로 한다.
     """
     if isinstance(filepaths, list):
         keys = ['합섬', '스텐', '제강']
         filepaths = dict(zip(keys, filepaths))
 
     frames = []
-    for 부문, path in filepaths.items():
-        df = pd.read_excel(path, sheet_name=0)
-        df['부문'] = 부문
-        frames.append(df)
+    for 부문, spec in filepaths.items():
+        if isinstance(spec, dict):
+            items = spec.items()
+        else:
+            items = [('수출', spec)]
+
+        for 구분, path in items:
+            if not path:
+                continue
+            df = pd.read_excel(path, sheet_name=0)
+            df['부문'] = 부문
+            df['내수/수출'] = 구분
+            frames.append(df)
+
+    if not frames:
+        raise FileNotFoundError("거래처/END USER 상세 파일을 찾을 수 없습니다.")
+
     df = pd.concat(frames, ignore_index=True)
 
-    for col in ['담당자 세부', '담당자명', 'LVL2NM', 'LVL1NM', '거래처']:
+    if '인수처명' in df.columns:
+        df['END_USER'] = df['인수처명']
+    elif '거래처' in df.columns:
+        df['END_USER'] = df['거래처']
+    else:
+        df['END_USER'] = ''
+
+    for col in ['담당자 세부', '담당자명', 'LVL2NM', 'LVL1NM', '거래처', '인수처명', 'END_USER', '내수/수출']:
         if col in df.columns:
             df[col] = df[col].astype(str).str.strip()
     df['월'] = df['출고요청년월'].astype(str).str[-2:] + '월'
@@ -320,10 +342,11 @@ def load_customer_data(filepaths):
 
 
 def get_top_customers(cdf, 부문, rep, lv2, month, 구분='수출', n=3):
-    """특정 담당자×품목×월의 상위 거래처 반환"""
+    """특정 담당자×품목×월의 상위 END USER(인수처명) 반환"""
     rep_col = '담당자 세부' if 구분 == '수출' else '담당자명'
     amt_col = '달러금액' if 구분 == '수출' else '원화금액'
-    if rep_col not in cdf.columns or amt_col not in cdf.columns:
+    user_col = 'END_USER' if 'END_USER' in cdf.columns else '인수처명'
+    if rep_col not in cdf.columns or amt_col not in cdf.columns or user_col not in cdf.columns:
         return []
 
     sub = cdf[
@@ -332,9 +355,11 @@ def get_top_customers(cdf, 부문, rep, lv2, month, 구분='수출', n=3):
         (cdf['LVL2NM'] == lv2) &
         (cdf['월'] == month)
     ]
+    if '내수/수출' in sub.columns:
+        sub = sub[sub['내수/수출'] == 구분]
     if sub.empty:
         return []
-    top = sub.groupby('거래처')[amt_col].sum().sort_values(ascending=False).head(n)
+    top = sub.groupby(user_col)[amt_col].sum().sort_values(ascending=False).head(n)
     return [(name, amt) for name, amt in top.items()]
 
 
@@ -435,7 +460,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
             for rep, lv2name, v2, v1, v0 in base_effects:
                 customers = get_top_customers(cdf, 부문, rep, lv2name, prev_m, 구분=구분, n=top_n)
                 cust_str = _format_customers(customers, unit)
-                suffix = f" - 주요 거래처: {cust_str}" if cust_str else ""
+                suffix = f" - 주요 END USER: {cust_str}" if cust_str else ""
                 be_parts.append(f"{rep}의 {lv2name} 전월 출고({v1:,.0f}{unit})에 따른 기저효과{suffix}")
             base_str = ". ".join(be_parts) + "가 작용하였음"
 
@@ -454,7 +479,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
             )
             cust_str = _format_customers(customers, unit)
             if cust_str:
-                line += f" - 주요 거래처: {cust_str}"
+                line += f" - 주요 END USER: {cust_str}"
             growth_lines.append(line)
         growth_str = "주요 증가 요인은 " + ", ".join(growth_lines) + "임" if growth_lines else ""
 
@@ -478,7 +503,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
                 customers = get_top_customers(cdf, 부문, rep, best_lv2, customer_month, 구분=구분, n=top_n)
                 cust_str = _format_customers(customers, unit)
                 if cust_str:
-                    line += f" ({best_lv2} 중심 - 주요 거래처: {cust_str})"
+                    line += f" ({best_lv2} 중심 - 주요 END USER: {cust_str})"
 
             rep_lines.append(line)
 
@@ -501,24 +526,24 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
 
 
 def generate_full_report_with_customers(df, cdf, months):
-    """거래처 포함 전체 코멘트 생성"""
+    """END USER 포함 전체 코멘트 생성"""
     df = _preprocess(df)
     curr_m = months[-1]
 
     lines = [
-        f"# {curr_m} 매출실적 분석 코멘트 (거래처 포함, 자동 생성)\n",
+        f"# {curr_m} 매출실적 분석 코멘트 (END USER 포함, 자동 생성)\n",
         f"> 전월: {months[-2]} | 당월: {curr_m}\n",
         "---\n",
-        "## 수출 (거래처 포함)\n",
+        "## 수출 (END USER 포함)\n",
     ]
     for 부문 in ['합섬', '스텐', '제강']:
         c = generate_comment_with_customers(df, cdf, 부문, months)
         lines.append(f"- **{부문}** : {c['수출']}")
 
-    lines.append("\n## 내수\n")
+    lines.append("\n## 내수 (END USER 포함)\n")
     for 부문 in ['합섬', '스텐', '제강']:
-        c = generate_comment(df, 부문, months)
+        c = generate_comment_with_customers(df, cdf, 부문, months)
         lines.append(f"- **{부문}** : {c['내수']}")
 
-    lines += ["\n---", "> ⚠️ 자동 생성된 초안입니다. 거래처·기저효과 맥락을 추가해 주세요."]
+    lines += ["\n---", "> ⚠️ 자동 생성된 초안입니다. END USER·기저효과 맥락을 추가해 주세요."]
     return "\n".join(lines)

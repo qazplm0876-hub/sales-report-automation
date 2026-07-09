@@ -24,9 +24,12 @@ data\2026-06\input
 ├─ DSR_06_상원.xlsx          # 없으면 섹션4만 자동 스킵
 ├─ 제강06_상원.xlsx          # 없으면 섹션4만 자동 스킵
 └─ customers
-   ├─ 1.xlsx                 # 합섬 수출 거래처
-   ├─ 2.xlsx                 # 스텐 수출 거래처
-   └─ 3.xlsx                 # 제강 수출 거래처
+   ├─ 1.xlsx                 # 합섬 수출 END USER
+   ├─ 2.xlsx                 # 스텐 수출 END USER
+   ├─ 3.xlsx                 # 제강 수출 END USER
+   ├─ 1_내수.xlsx            # 합섬 내수 END USER, 있으면 반영
+   ├─ 2_내수.xlsx            # 스텐 내수 END USER, 있으면 반영
+   └─ 3_내수.xlsx            # 제강 내수 END USER, 있으면 반영
 ```
 
 3. `run_monthly_report.bat`을 더블클릭합니다.
@@ -67,4 +70,4 @@ python monthly_report_final.py --month 6
 
 GitHub에는 자동화 코드와 설명서만 올립니다.
 
-엑셀 원자료, 거래처 파일, 완성 보고서, PDF는 민감 자료이므로 `.gitignore`에서 제외합니다.
+엑셀 원자료, END USER 상세 파일, 완성 보고서, PDF는 민감 자료이므로 `.gitignore`에서 제외합니다.
