@@ -72,6 +72,69 @@ def fmt_lv1(name):
     return mapping.get(name, name)
 
 
+def _pct_change(prev, curr):
+    if prev > 0:
+        return (curr - prev) / prev * 100
+    return 100.0 if curr > 0 else 0.0
+
+
+def _get_growth_factors(sub, rep_col, amt_col, prev_m, curr_m, top_n=3):
+    """전월 대비 증가액 기여가 큰 담당자/품목 조합을 반환"""
+    required = {'월', rep_col, '레벨1명', '레벨2명', amt_col}
+    if not required.issubset(set(sub.columns)):
+        return []
+
+    grp = (
+        sub.groupby(['월', rep_col, '레벨1명', '레벨2명'])[amt_col]
+        .sum()
+        .unstack('월')
+        .fillna(0)
+    )
+    if grp.empty:
+        return []
+
+    positive_rows = []
+    for (rep, lv1, lv2), row in grp.iterrows():
+        prev = float(row.get(prev_m, 0))
+        curr = float(row.get(curr_m, 0))
+        delta = curr - prev
+        if delta <= 0:
+            continue
+        positive_rows.append({
+            'rep': rep,
+            'lv1': lv1,
+            'lv2': lv2,
+            'prev': prev,
+            'curr': curr,
+            'delta': delta,
+            'pct': _pct_change(prev, curr),
+        })
+
+    total_positive_delta = sum(row['delta'] for row in positive_rows)
+    for row in positive_rows:
+        row['contribution'] = (
+            row['delta'] / total_positive_delta * 100 if total_positive_delta else 0
+        )
+
+    positive_rows.sort(key=lambda row: row['delta'], reverse=True)
+    return positive_rows[:top_n]
+
+
+def _format_growth_factors(factors, unit):
+    if not factors:
+        return ""
+
+    parts = []
+    for item in factors:
+        lv1 = fmt_lv1(item['lv1'])
+        parts.append(
+            f"{item['rep']}의 {lv1}/{item['lv2']} "
+            f"+{item['delta']:,.0f}{unit}({item['pct']:.0f}% 증가, "
+            f"증가분 기여 {item['contribution']:.0f}%)"
+        )
+    return "주요 증가 요인은 " + ", ".join(parts) + "임"
+
+
 def generate_comment(df, 부문, months):
     """부문별 수출/내수 코멘트 생성"""
     df = _preprocess(df)
@@ -138,6 +201,12 @@ def generate_comment(df, 부문, months):
                         for rep, lv2name, v2, v1, v0 in base_effects]
             base_str = ". ".join(be_parts) + "가 작용하였음"
 
+        # 주요 증가 요인
+        growth_str = _format_growth_factors(
+            _get_growth_factors(sub, rep_col, amt_col, prev_m, curr_m),
+            unit,
+        )
+
         # 담당자별 주요 증감 (수출)
         rep_str = ""
         if 구분 == '수출':
@@ -158,6 +227,8 @@ def generate_comment(df, 부문, months):
         parts = [f"전체실적 전월대비 {tot_pct:.0f}% 수준으로"]
         if change_str:
             parts.append(change_str)
+        if growth_str:
+            parts.append(growth_str)
         if base_str:
             parts.append(base_str)
         if rep_str:
@@ -368,6 +439,25 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
                 be_parts.append(f"{rep}의 {lv2name} 전월 출고({v1:,.0f}{unit})에 따른 기저효과{suffix}")
             base_str = ". ".join(be_parts) + "가 작용하였음"
 
+        # 주요 증가 요인
+        growth_factors = _get_growth_factors(sub, rep_col, amt_col, prev_m, curr_m)
+        growth_lines = []
+        for item in growth_factors:
+            lv1 = fmt_lv1(item['lv1'])
+            line = (
+                f"{item['rep']}의 {lv1}/{item['lv2']} "
+                f"+{item['delta']:,.0f}{unit}({item['pct']:.0f}% 증가, "
+                f"증가분 기여 {item['contribution']:.0f}%)"
+            )
+            customers = get_top_customers(
+                cdf, 부문, item['rep'], item['lv2'], curr_m, 구분=구분, n=top_n
+            )
+            cust_str = _format_customers(customers, unit)
+            if cust_str:
+                line += f" - 주요 거래처: {cust_str}"
+            growth_lines.append(line)
+        growth_str = "주요 증가 요인은 " + ", ".join(growth_lines) + "임" if growth_lines else ""
+
         # 담당자별 주요 증감 + 거래처
         rep_grp = sub.groupby(['월', rep_col])[amt_col].sum().unstack('월').fillna(0)
         rep_changes = []
@@ -398,6 +488,8 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
         parts = [f"전체실적 전월대비 {tot_pct:.0f}% 수준으로"]
         if change_str:
             parts.append(change_str)
+        if growth_str:
+            parts.append(growth_str)
         if base_str:
             parts.append(base_str)
         if rep_str:
