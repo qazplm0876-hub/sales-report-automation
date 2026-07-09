@@ -707,6 +707,76 @@ def verify_report(ws4, df26, df25, section4_available=True):
 # =============================================
 # 메인 실행
 # =============================================
+def save_comment_pdf(markdown_text, pdf_file):
+    """코멘트 Markdown을 읽기 좋은 PDF로 저장"""
+    import html
+    import os
+    import re
+    from reportlab.lib import colors
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+    from reportlab.lib.units import mm
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+
+    font_name = "Helvetica"
+    for path in ["C:/Windows/Fonts/malgun.ttf", "C:/Windows/Fonts/gulim.ttc", "C:/Windows/Fonts/batang.ttc"]:
+        if os.path.exists(path):
+            try:
+                pdfmetrics.registerFont(TTFont("Korean", path))
+                font_name = "Korean"
+                break
+            except Exception:
+                pass
+
+    styles = getSampleStyleSheet()
+    title = ParagraphStyle("CommentTitle", parent=styles["Title"], fontName=font_name, fontSize=17, leading=23, textColor=colors.HexColor("#1f2937"), spaceAfter=8 * mm)
+    heading = ParagraphStyle("CommentHeading", parent=styles["Heading2"], fontName=font_name, fontSize=13, leading=18, textColor=colors.HexColor("#1d4ed8"), spaceBefore=5 * mm, spaceAfter=3 * mm)
+    subheading = ParagraphStyle("CommentSubheading", parent=styles["BodyText"], fontName=font_name, fontSize=11, leading=16, textColor=colors.HexColor("#111827"), spaceBefore=3 * mm, spaceAfter=2 * mm)
+    body = ParagraphStyle("CommentBody", parent=styles["BodyText"], fontName=font_name, fontSize=9.2, leading=14, firstLineIndent=0, leftIndent=4 * mm, spaceAfter=1.8 * mm)
+    note = ParagraphStyle("CommentNote", parent=body, fontSize=8.8, leading=13, textColor=colors.HexColor("#6b7280"), leftIndent=0)
+    doc = SimpleDocTemplate(pdf_file, pagesize=A4, rightMargin=16 * mm, leftMargin=16 * mm, topMargin=15 * mm, bottomMargin=15 * mm, title=f"{MONTH}월 매출실적 분석 코멘트")
+
+    def convert_inline(text):
+        text = html.escape(text.strip())
+        text = re.sub(r"\*\*(.+?)\*\*", r"<b>\1</b>", text)
+        return text
+
+    def split_sentences(text):
+        text = text.strip()
+        if not text:
+            return []
+        parts = re.split(r"(?<=[.!??])\s+", text)
+        return [part.strip() for part in parts if part.strip()]
+
+    story = []
+    for raw_line in markdown_text.splitlines():
+        line = raw_line.strip()
+        if not line or line == "---":
+            continue
+        if line.startswith("# "):
+            story.append(Paragraph(convert_inline(line[2:]), title))
+            continue
+        if line.startswith("## "):
+            story.append(Paragraph(convert_inline(line[3:]), heading))
+            continue
+        if line.startswith(">"):
+            story.append(Paragraph(convert_inline(line.lstrip("> ")), note))
+            continue
+        section_match = re.match(r"-\s+\*\*(.+?)\*\*\s*:\s*(.*)", line)
+        if section_match:
+            label, content = section_match.groups()
+            story.append(Paragraph(convert_inline(label), subheading))
+            for sentence in split_sentences(content):
+                story.append(Paragraph("• " + convert_inline(sentence), body))
+            story.append(Spacer(1, 2 * mm))
+            continue
+        for sentence in split_sentences(line):
+            story.append(Paragraph(convert_inline(sentence), body))
+    doc.build(story)
+
+
 def run():
     print(f"{'='*60}")
     print(f"  {MONTH}월 매출실적분석 자동입력")
@@ -774,6 +844,10 @@ def run():
     with open(comment_file, 'w', encoding='utf-8') as f:
         f.write(report)
     print(f"[완료] 코멘트 초안 저장: {comment_file}")
+
+    comment_pdf_file = os.path.join(OUTPUT_DIR, f"코멘트_{MONTH}월.pdf")
+    save_comment_pdf(report, comment_pdf_file)
+    print(f"[완료] 코멘트 PDF 저장: {comment_pdf_file}")
 
     print(f"\n저장 완료: {OUTPUT_FILE}")
 
