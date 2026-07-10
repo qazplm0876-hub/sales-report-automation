@@ -79,7 +79,7 @@ def _pct_change(prev, curr):
 
 
 def _get_growth_factors(sub, rep_col, amt_col, prev_m, curr_m, top_n=3):
-    """전월 대비 증가액 기여가 큰 담당자/품목 조합을 반환"""
+    """전월 대비 증가액이 큰 담당자/품목 조합을 반환"""
     required = {'월', rep_col, '레벨1명', '레벨2명', amt_col}
     if not required.issubset(set(sub.columns)):
         return []
@@ -130,7 +130,7 @@ def _format_growth_factors(factors, unit):
         parts.append(
             f"{item['rep']}의 {lv1}/{item['lv2']} "
             f"+{item['delta']:,.0f}{unit}({item['pct']:.0f}% 증가, "
-            f"증가분 기여 {item['contribution']:.0f}%)"
+            f"증가요인 내 비중 {item['contribution']:.0f}%)"
         )
     return "주요 증가 요인은 " + ", ".join(parts) + "임"
 
@@ -472,7 +472,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
             line = (
                 f"{item['rep']}의 {lv1}/{item['lv2']} "
                 f"+{item['delta']:,.0f}{unit}({item['pct']:.0f}% 증가, "
-                f"증가분 기여 {item['contribution']:.0f}%)"
+                f"증가요인 내 비중 {item['contribution']:.0f}%)"
             )
             customers = get_top_customers(
                 cdf, 부문, item['rep'], item['lv2'], curr_m, 구분=구분, n=top_n
