@@ -120,6 +120,84 @@ def _get_growth_factors(sub, rep_col, amt_col, prev_m, curr_m, top_n=3):
     return positive_rows[:top_n]
 
 
+def _get_decline_factors(sub, rep_col, amt_col, prev_m, curr_m, top_n=3):
+    """전월 대비 감소액이 큰 담당자/품목 조합을 반환"""
+    required = {'월', rep_col, '레벨1명', '레벨2명', amt_col}
+    if not required.issubset(set(sub.columns)):
+        return []
+
+    grp = (
+        sub.groupby(['월', rep_col, '레벨1명', '레벨2명'])[amt_col]
+        .sum()
+        .unstack('월')
+        .fillna(0)
+    )
+    if grp.empty:
+        return []
+
+    negative_rows = []
+    for (rep, lv1, lv2), row in grp.iterrows():
+        prev = float(row.get(prev_m, 0))
+        curr = float(row.get(curr_m, 0))
+        delta = curr - prev
+        if delta >= 0:
+            continue
+        negative_rows.append({
+            'rep': rep,
+            'lv1': lv1,
+            'lv2': lv2,
+            'prev': prev,
+            'curr': curr,
+            'delta': delta,
+            'pct': _pct_change(prev, curr),
+        })
+
+    total_decline = sum(abs(row['delta']) for row in negative_rows)
+    for row in negative_rows:
+        row['contribution'] = (
+            abs(row['delta']) / total_decline * 100 if total_decline else 0
+        )
+
+    negative_rows.sort(key=lambda row: row['delta'])
+    return negative_rows[:top_n]
+
+
+def _get_lv1_changes(sub, amt_col, prev_m, curr_m):
+    """품목군별 전월/당월 실적을 증감액 절댓값 순으로 반환"""
+    grp = sub.groupby(['월', '레벨1명'])[amt_col].sum().unstack('월').fillna(0)
+    changes = []
+    for lv1, row in grp.iterrows():
+        prev = float(row.get(prev_m, 0))
+        curr = float(row.get(curr_m, 0))
+        delta = curr - prev
+        if prev == 0 and curr == 0:
+            continue
+        changes.append({
+            'lv1': lv1,
+            'prev': prev,
+            'curr': curr,
+            'delta': delta,
+            'pct': _pct_change(prev, curr),
+        })
+    changes.sort(key=lambda row: abs(row['delta']), reverse=True)
+    return changes
+
+
+def _format_signed(value, unit):
+    return f"{value:+,.0f}{unit}"
+
+
+def _format_change(prev, curr, unit):
+    delta = curr - prev
+    if prev == 0 and curr > 0:
+        return f"0 → {curr:,.0f}{unit} ({_format_signed(delta, unit)}, 신규 출고)"
+    pct = _pct_change(prev, curr)
+    return (
+        f"{prev:,.0f} → {curr:,.0f}{unit} "
+        f"({_format_signed(delta, unit)}, {pct:+.0f}%)"
+    )
+
+
 def _format_growth_factors(factors, unit):
     if not factors:
         return ""
@@ -426,64 +504,14 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
         # 전월/당월 총액
         prev_tot = sub[sub['월'] == prev_m][amt_col].sum()
         curr_tot = sub[sub['월'] == curr_m][amt_col].sum()
-        tot_pct = curr_tot / prev_tot * 100 if prev_tot else 0
-
-        # 레벨1별 증감
-        lv1_grp = sub.groupby(['월', '레벨1명'])[amt_col].sum().unstack('월').fillna(0)
-        lv1_changes = {}
-        for lv1 in lv1_grp.index:
-            p = float(lv1_grp.loc[lv1].get(prev_m, 0))
-            c = float(lv1_grp.loc[lv1].get(curr_m, 0))
-            if p > 0:
-                lv1_changes[lv1] = (c - p) / p * 100
-
-        increases = sorted([(k, v) for k, v in lv1_changes.items() if v > 5], key=lambda x: -x[1])
-        decreases = sorted([(k, v) for k, v in lv1_changes.items() if v < -5], key=lambda x: x[1])
-
-        inc_str = ' / '.join([f"{fmt_lv1(k)} {abs(v):.0f}% 증가" for k, v in increases])
-        dec_str = ' / '.join([f"{fmt_lv1(k)} {abs(v):.0f}% 감소" for k, v in decreases])
-
-        if inc_str and dec_str:
-            change_str = f"{inc_str}하며 {dec_str}하였음"
-        elif inc_str:
-            change_str = f"{inc_str}하였음"
-        elif dec_str:
-            change_str = f"{dec_str}하였음"
-        else:
-            change_str = ""
-
-        # 기저효과
-        base_effects = detect_base_effect(df, 부문, 구분_list, rep_col, months)
-        base_str = ""
-        if base_effects:
-            be_parts = []
-            for rep, lv2name, v2, v1, v0 in base_effects:
-                customers = get_top_customers(cdf, 부문, rep, lv2name, prev_m, 구분=구분, n=top_n)
-                cust_str = _format_customers(customers, unit)
-                suffix = f" - 주요 END USER: {cust_str}" if cust_str else ""
-                be_parts.append(f"{rep}의 {lv2name} 전월 출고({v1:,.0f}{unit})에 따른 기저효과{suffix}")
-            base_str = ". ".join(be_parts) + "가 작용하였음"
-
-        # 주요 증가 요인
+        total_delta = curr_tot - prev_tot
+        total_pct = _pct_change(prev_tot, curr_tot)
+        lv1_changes = _get_lv1_changes(sub, amt_col, prev_m, curr_m)
         growth_factors = _get_growth_factors(sub, rep_col, amt_col, prev_m, curr_m)
-        growth_lines = []
-        for item in growth_factors:
-            lv1 = fmt_lv1(item['lv1'])
-            line = (
-                f"{item['rep']}의 {lv1}/{item['lv2']} "
-                f"+{item['delta']:,.0f}{unit}({item['pct']:.0f}% 증가, "
-                f"증가요인 내 비중 {item['contribution']:.0f}%)"
-            )
-            customers = get_top_customers(
-                cdf, 부문, item['rep'], item['lv2'], curr_m, 구분=구분, n=top_n
-            )
-            cust_str = _format_customers(customers, unit)
-            if cust_str:
-                line += f" - 주요 END USER: {cust_str}"
-            growth_lines.append(line)
-        growth_str = "주요 증가 요인은 " + ", ".join(growth_lines) + "임" if growth_lines else ""
+        decline_factors = _get_decline_factors(sub, rep_col, amt_col, prev_m, curr_m)
+        base_effects = detect_base_effect(df, 부문, 구분_list, rep_col, months)
 
-        # 담당자별 주요 증감 + 거래처
+        # 담당자/지역별 주요 증감
         rep_grp = sub.groupby(['월', rep_col])[amt_col].sum().unstack('월').fillna(0)
         rep_changes = []
         for rep in rep_grp.index:
@@ -491,36 +519,91 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
             c = float(rep_grp.loc[rep].get(curr_m, 0))
             if p > 0 and abs((c - p) / p) > 0.3 and max(p, c) > 50:
                 rep_changes.append((rep, p, c, (c - p) / p * 100))
-        rep_changes.sort(key=lambda x: -abs(x[3]))
+        rep_changes.sort(key=lambda row: abs(row[2] - row[1]), reverse=True)
 
-        rep_lines = []
-        for rep, p, c, pct in rep_changes[:3]:
-            arrow = "증가" if pct > 0 else "감소"
-            line = f"{rep} {abs(pct):.0f}% {arrow}"
+        lines = [
+            "**한눈에 보기**",
+            f"- 실적: {_format_change(prev_tot, curr_tot, unit)}",
+        ]
 
-            best_lv2, customer_month = _top_changed_lv2(sub, rep_col, rep, amt_col, prev_m, curr_m, pct)
-            if best_lv2:
-                customers = get_top_customers(cdf, 부문, rep, best_lv2, customer_month, 구분=구분, n=top_n)
+        if lv1_changes:
+            lines.extend(["", "**품목별 변화**"])
+            for item in lv1_changes:
+                if abs(item['pct']) < 5 and abs(item['delta']) < max(abs(total_delta) * 0.05, 1):
+                    continue
+                lines.append(
+                    f"- {fmt_lv1(item['lv1'])}: "
+                    f"{_format_change(item['prev'], item['curr'], unit)}"
+                )
+
+        def append_factor_section(title, factors, customer_month):
+            if not factors:
+                return
+            lines.extend(["", f"**{title}**"])
+            for index, item in enumerate(factors, 1):
+                lines.append(
+                    f"{index}. {item['rep']} · {fmt_lv1(item['lv1'])}/{item['lv2']}: "
+                    f"{_format_change(item['prev'], item['curr'], unit)}, "
+                    f"{title.replace('주요 ', '')} 내 비중 {item['contribution']:.0f}%"
+                )
+                customers = get_top_customers(
+                    cdf, 부문, item['rep'], item['lv2'], customer_month,
+                    구분=구분, n=top_n,
+                )
                 cust_str = _format_customers(customers, unit)
                 if cust_str:
-                    line += f" ({best_lv2} 중심 - 주요 END USER: {cust_str})"
+                    lines.append(f"   - END USER: {cust_str}")
 
-            rep_lines.append(line)
+        append_factor_section("주요 증가 요인", growth_factors, curr_m)
+        append_factor_section("주요 감소 요인", decline_factors, prev_m)
 
-        rep_str = ", ".join(rep_lines) + "함" if rep_lines else ""
+        if rep_changes:
+            lines.extend(["", f"**주요 {'지역' if 구분 == '수출' else '담당자'} 변화**"])
+            for rep, prev, curr, pct in rep_changes[:3]:
+                best_lv2, _ = _top_changed_lv2(
+                    sub, rep_col, rep, amt_col, prev_m, curr_m, pct
+                )
+                suffix = f", 핵심 품목 {best_lv2}" if best_lv2 else ""
+                lines.append(
+                    f"- {rep}: {_format_change(prev, curr, unit)}{suffix}"
+                )
 
-        # 코멘트 조합
-        parts = [f"전체실적 전월대비 {tot_pct:.0f}% 수준으로"]
-        if change_str:
-            parts.append(change_str)
-        if growth_str:
-            parts.append(growth_str)
-        if base_str:
-            parts.append(base_str)
-        if rep_str:
-            parts.append(rep_str)
+        if base_effects:
+            lines.extend(["", "**기저효과 확인**"])
+            for rep, lv2name, prev2, prev, curr in sorted(
+                base_effects, key=lambda row: row[3] - row[4], reverse=True
+            )[:3]:
+                line = (
+                    f"- {rep} · {lv2name}: {months[-3]} {prev2:,.0f} → "
+                    f"{prev_m} {prev:,.0f} → {curr_m} {curr:,.0f}{unit}. "
+                    f"전월 일시 출고 후 감소"
+                )
+                customers = get_top_customers(
+                    cdf, 부문, rep, lv2name, prev_m, 구분=구분, n=top_n
+                )
+                cust_str = _format_customers(customers, unit)
+                if cust_str:
+                    line += f" (전월 END USER: {cust_str})"
+                lines.append(line)
 
-        result[구분] = ". ".join(parts) + "."
+        driver = growth_factors[0] if total_delta >= 0 and growth_factors else (
+            decline_factors[0] if decline_factors else None
+        )
+        if driver:
+            direction = "증가" if total_delta >= 0 else "감소"
+            offset = decline_factors[0] if total_delta >= 0 and decline_factors else None
+            insight = (
+                f"전체 실적은 전월보다 {_format_signed(total_delta, unit)}({total_pct:+.0f}%) {direction}. "
+                f"{driver['rep']}의 {fmt_lv1(driver['lv1'])}/{driver['lv2']} 변화가 가장 큰 요인"
+            )
+            if offset:
+                insight += (
+                    f"이며, {offset['rep']}의 {fmt_lv1(offset['lv1'])}/{offset['lv2']} "
+                    f"감소가 일부 상쇄"
+                )
+            lines.extend(["", "**종합 해석**", f"- {insight}."])
+
+        result[구분] = "\n".join(lines)
 
     return result
 
@@ -531,19 +614,19 @@ def generate_full_report_with_customers(df, cdf, months):
     curr_m = months[-1]
 
     lines = [
-        f"# {curr_m} 매출실적 분석 코멘트 (END USER 포함, 자동 생성)\n",
+        f"# {curr_m} 매출실적 상세 분석\n",
         f"> 전월: {months[-2]} | 당월: {curr_m}\n",
         "---\n",
-        "## 수출 (END USER 포함)\n",
+        "## 수출\n",
     ]
     for 부문 in ['합섬', '스텐', '제강']:
         c = generate_comment_with_customers(df, cdf, 부문, months)
-        lines.append(f"- **{부문}** : {c['수출']}")
+        lines.append(f"### {부문}\n{c['수출']}\n")
 
-    lines.append("\n## 내수 (END USER 포함)\n")
+    lines.append("\n## 내수\n")
     for 부문 in ['합섬', '스텐', '제강']:
         c = generate_comment_with_customers(df, cdf, 부문, months)
-        lines.append(f"- **{부문}** : {c['내수']}")
+        lines.append(f"### {부문}\n{c['내수']}\n")
 
-    lines += ["\n---", "> ⚠️ 자동 생성된 초안입니다. END USER·기저효과 맥락을 추가해 주세요."]
+    lines += ["\n---", "> 자동 생성 초안입니다. 특이 출고와 일회성 요인은 최종 보고 전에 확인해 주세요."]
     return "\n".join(lines)

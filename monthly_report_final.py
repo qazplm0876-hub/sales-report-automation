@@ -733,8 +733,10 @@ def save_comment_pdf(markdown_text, pdf_file):
     styles = getSampleStyleSheet()
     title = ParagraphStyle("CommentTitle", parent=styles["Title"], fontName=font_name, fontSize=17, leading=23, textColor=colors.HexColor("#1f2937"), spaceAfter=8 * mm)
     heading = ParagraphStyle("CommentHeading", parent=styles["Heading2"], fontName=font_name, fontSize=13, leading=18, textColor=colors.HexColor("#1d4ed8"), spaceBefore=5 * mm, spaceAfter=3 * mm)
-    subheading = ParagraphStyle("CommentSubheading", parent=styles["BodyText"], fontName=font_name, fontSize=11, leading=16, textColor=colors.HexColor("#111827"), spaceBefore=3 * mm, spaceAfter=2 * mm)
+    subheading = ParagraphStyle("CommentSubheading", parent=styles["BodyText"], fontName=font_name, fontSize=11, leading=16, textColor=colors.HexColor("#111827"), spaceBefore=4 * mm, spaceAfter=2 * mm)
+    label = ParagraphStyle("CommentLabel", parent=styles["BodyText"], fontName=font_name, fontSize=9.6, leading=14, textColor=colors.HexColor("#374151"), spaceBefore=2.5 * mm, spaceAfter=1 * mm)
     body = ParagraphStyle("CommentBody", parent=styles["BodyText"], fontName=font_name, fontSize=9.2, leading=14, firstLineIndent=0, leftIndent=4 * mm, spaceAfter=1.8 * mm)
+    nested_body = ParagraphStyle("CommentNestedBody", parent=body, leftIndent=10 * mm, textColor=colors.HexColor("#4b5563"))
     note = ParagraphStyle("CommentNote", parent=body, fontSize=8.8, leading=13, textColor=colors.HexColor("#6b7280"), leftIndent=0)
     doc = SimpleDocTemplate(pdf_file, pagesize=A4, rightMargin=16 * mm, leftMargin=16 * mm, topMargin=15 * mm, bottomMargin=15 * mm, title=f"{MONTH}월 매출실적 분석 코멘트")
 
@@ -761,16 +763,33 @@ def save_comment_pdf(markdown_text, pdf_file):
         if line.startswith("## "):
             story.append(Paragraph(convert_inline(line[3:]), heading))
             continue
+        if line.startswith("### "):
+            story.append(Paragraph(convert_inline(line[4:]), subheading))
+            continue
         if line.startswith(">"):
             story.append(Paragraph(convert_inline(line.lstrip("> ")), note))
             continue
+        if re.fullmatch(r"\*\*.+?\*\*", line):
+            story.append(Paragraph(convert_inline(line), label))
+            continue
+        numbered_match = re.match(r"(\d+)\.\s+(.*)", line)
+        if numbered_match:
+            number, content = numbered_match.groups()
+            story.append(Paragraph(f"{number}. " + convert_inline(content), body))
+            continue
         section_match = re.match(r"-\s+\*\*(.+?)\*\*\s*:\s*(.*)", line)
         if section_match:
-            label, content = section_match.groups()
-            story.append(Paragraph(convert_inline(label), subheading))
+            section_label, content = section_match.groups()
+            story.append(Paragraph(convert_inline(section_label), subheading))
             for sentence in split_sentences(content):
                 story.append(Paragraph("• " + convert_inline(sentence), body))
             story.append(Spacer(1, 2 * mm))
+            continue
+        if raw_line.startswith("   - "):
+            story.append(Paragraph("- " + convert_inline(line[2:]), nested_body))
+            continue
+        if line.startswith("- "):
+            story.append(Paragraph("• " + convert_inline(line[2:]), body))
             continue
         for sentence in split_sentences(line):
             story.append(Paragraph(convert_inline(sentence), body))
