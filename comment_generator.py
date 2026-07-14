@@ -7,6 +7,11 @@ comment_generator.py
 import pandas as pd
 
 
+# 본표의 수출판매 집계와 동일하게 국내 법인의 일반 수출만 포함한다.
+# CABLE VINA-수출 등 해외법인 구분은 별도 현지실적이므로 코멘트에서 제외한다.
+EXPORT_SALES_TYPES = ['수출']
+
+
 def _preprocess(df):
     """부문 STS→스텐 변환 및 공통 전처리"""
     df = df.copy()
@@ -187,6 +192,11 @@ def _format_signed(value, unit):
     return f"{value:+,.0f}{unit}"
 
 
+def _format_percent(value):
+    precision = 1 if 0 < abs(value) < 1 else 0
+    return f"{value:+.{precision}f}%"
+
+
 def _format_change(prev, curr, unit):
     delta = curr - prev
     if prev == 0 and curr > 0:
@@ -194,7 +204,7 @@ def _format_change(prev, curr, unit):
     pct = _pct_change(prev, curr)
     return (
         f"{prev:,.0f} → {curr:,.0f}{unit} "
-        f"({_format_signed(delta, unit)}, {pct:+.0f}%)"
+        f"({_format_signed(delta, unit)}, {_format_percent(pct)})"
     )
 
 
@@ -225,8 +235,7 @@ def generate_comment(df, 부문, months):
 
     for 구분 in ['수출', '내수']:
         if 구분 == '수출':
-            구분_list = [c for c in df['내수/수출'].unique()
-                        if '수출' in str(c) and '현지내수' not in str(c) and 'TRADING' not in str(c)]
+            구분_list = EXPORT_SALES_TYPES
             amt_col = '달러금액'
             unit = '$K'
             rep_col = '담당자(세부)명'
@@ -485,8 +494,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
 
     for 구분 in ['수출', '내수']:
         if 구분 == '수출':
-            구분_list = [c for c in df['내수/수출'].unique()
-                        if '수출' in str(c) and '현지내수' not in str(c) and 'TRADING' not in str(c)]
+            구분_list = EXPORT_SALES_TYPES
             amt_col = '달러금액'
             unit = '$K'
             rep_col = '담당자(세부)명'
@@ -593,7 +601,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
             direction = "증가" if total_delta >= 0 else "감소"
             offset = decline_factors[0] if total_delta >= 0 and decline_factors else None
             insight = (
-                f"전체 실적은 전월보다 {_format_signed(total_delta, unit)}({total_pct:+.0f}%) {direction}. "
+                f"전체 실적은 전월보다 {_format_signed(total_delta, unit)}({_format_percent(total_pct)}) {direction}. "
                 f"{driver['rep']}의 {fmt_lv1(driver['lv1'])}/{driver['lv2']} 변화가 가장 큰 요인"
             )
             if offset:
