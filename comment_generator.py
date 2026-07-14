@@ -456,27 +456,64 @@ def _format_customers(customers, unit):
     return ", ".join([f"{name}({amt:,.0f}{unit})" for name, amt in customers])
 
 
-def _top_changed_lv2(sub, rep_col, rep, amt_col, prev_m, curr_m, pct):
-    """증가는 당월, 감소는 전월 기여가 큰 품목을 우선 선택"""
+def _get_rep_product_changes(
+    sub, rep_col, rep, amt_col, prev_m, curr_m, max_lv1=4, max_lv2=3
+):
+    """지역/담당자 전체 변화를 품목군과 세부 품목 단위로 반환"""
     rep_sub = sub[sub[rep_col] == rep]
     if rep_sub.empty:
-        return None, curr_m
+        return []
 
-    grp = rep_sub.groupby(['월', '레벨2명'])[amt_col].sum().unstack('월').fillna(0)
-    if grp.empty:
-        return None, curr_m
+    changes = []
+    for lv1, lv1_sub in rep_sub.groupby('레벨1명'):
+        month_totals = lv1_sub.groupby('월')[amt_col].sum()
+        prev = float(month_totals.get(prev_m, 0))
+        curr = float(month_totals.get(curr_m, 0))
+        delta = curr - prev
+        if abs(delta) < 1e-9:
+            continue
 
-    if pct >= 0:
-        target_month = curr_m
-        sort_key = grp.get(curr_m, 0)
-    else:
-        target_month = prev_m
-        sort_key = grp.get(prev_m, 0) - grp.get(curr_m, 0)
+        lv2_grp = (
+            lv1_sub.groupby(['월', '레벨2명'])[amt_col]
+            .sum()
+            .unstack('월')
+            .fillna(0)
+        )
+        details = []
+        for lv2, row in lv2_grp.iterrows():
+            lv2_prev = float(row.get(prev_m, 0))
+            lv2_curr = float(row.get(curr_m, 0))
+            lv2_delta = lv2_curr - lv2_prev
+            if abs(lv2_delta) < 1e-9:
+                continue
+            details.append({
+                'lv2': lv2,
+                'prev': lv2_prev,
+                'curr': lv2_curr,
+                'delta': lv2_delta,
+                'pct': _pct_change(lv2_prev, lv2_curr),
+            })
 
-    sort_key = sort_key.sort_values(ascending=False)
-    if sort_key.empty:
-        return None, target_month
-    return sort_key.index[0], target_month
+        details.sort(key=lambda item: abs(item['delta']), reverse=True)
+        gross_change = sum(abs(item['delta']) for item in details)
+        detail_threshold = max(gross_change * 0.1, 1)
+        material_details = [
+            item for item in details if abs(item['delta']) >= detail_threshold
+        ][:max_lv2]
+        if not material_details and details:
+            material_details = details[:1]
+
+        changes.append({
+            'lv1': lv1,
+            'prev': prev,
+            'curr': curr,
+            'delta': delta,
+            'pct': _pct_change(prev, curr),
+            'details': material_details,
+        })
+
+    changes.sort(key=lambda item: abs(item['delta']), reverse=True)
+    return changes[:max_lv1]
 
 
 def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
@@ -522,11 +559,15 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
         # 담당자/지역별 주요 증감
         rep_grp = sub.groupby(['월', rep_col])[amt_col].sum().unstack('월').fillna(0)
         rep_changes = []
+        region_delta_threshold = max(abs(total_delta) * 0.1, 50)
         for rep in rep_grp.index:
             p = float(rep_grp.loc[rep].get(prev_m, 0))
             c = float(rep_grp.loc[rep].get(curr_m, 0))
-            if p > 0 and abs((c - p) / p) > 0.3 and max(p, c) > 50:
-                rep_changes.append((rep, p, c, (c - p) / p * 100))
+            pct = _pct_change(p, c)
+            large_rate_change = p > 0 and abs(pct) > 30
+            large_amount_change = abs(c - p) >= region_delta_threshold
+            if max(p, c) > 50 and (large_rate_change or large_amount_change):
+                rep_changes.append((rep, p, c, pct))
         rep_changes.sort(key=lambda row: abs(row[2] - row[1]), reverse=True)
 
         lines = [
@@ -568,13 +609,24 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
         if rep_changes:
             lines.extend(["", f"**주요 {'지역' if 구분 == '수출' else '담당자'} 변화**"])
             for rep, prev, curr, pct in rep_changes[:3]:
-                best_lv2, _ = _top_changed_lv2(
-                    sub, rep_col, rep, amt_col, prev_m, curr_m, pct
-                )
-                suffix = f", 핵심 품목 {best_lv2}" if best_lv2 else ""
                 lines.append(
-                    f"- {rep}: {_format_change(prev, curr, unit)}{suffix}"
+                    f"- {rep}: {_format_change(prev, curr, unit)}"
                 )
+                product_changes = _get_rep_product_changes(
+                    sub, rep_col, rep, amt_col, prev_m, curr_m
+                )
+                for product in product_changes:
+                    lines.append(
+                        f"  - {fmt_lv1(product['lv1'])}: "
+                        f"{_format_change(product['prev'], product['curr'], unit)}"
+                    )
+                    if product['details']:
+                        detail_text = "; ".join(
+                            f"{item['lv2']} "
+                            f"{_format_change(item['prev'], item['curr'], unit)}"
+                            for item in product['details']
+                        )
+                        lines.append(f"    - 세부 품목: {detail_text}")
 
         if base_effects:
             lines.extend(["", "**기저효과 확인**"])
