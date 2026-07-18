@@ -215,10 +215,19 @@ def unit_price_vol(ws, rows, month):
 
 def load_raw(filepath):
     """raw xls/xlsx 파일 로드 및 전처리"""
-    if filepath.endswith('.xlsx'):
+    ext = os.path.splitext(filepath)[1].lower()
+    if ext == '.xlsx':
         df = pd.read_excel(filepath, engine='openpyxl')
+    elif ext == '.xls':
+        try:
+            df = pd.read_excel(filepath, engine='xlrd')
+        except ImportError as exc:
+            raise RuntimeError(
+                "구형 .xls 파일을 읽으려면 xlrd가 필요합니다. "
+                "run_monthly_report.bat을 실행하면 자동으로 설치됩니다."
+            ) from exc
     else:
-        df = pd.read_excel(filepath, engine='xlrd')
+        raise ValueError(f"지원하지 않는 원장 형식입니다: {ext}")
     # 회사/계정/요청월 강제 문자열 변환 (xlsx에서 정수로 읽히는 문제 해결)
     df['회사']    = df['회사'].astype(str).str.strip()
     df['계정']    = df['계정'].astype(str).str.strip()

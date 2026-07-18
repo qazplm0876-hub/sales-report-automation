@@ -34,6 +34,10 @@ data\2026-06\input
 
 3. `run_monthly_report.bat`을 더블클릭합니다.
 
+처음 실행할 때는 저장소 안에 전용 Python 환경인 `.venv`를 만들고 필요한 패키지를 자동으로 설치합니다. 이 과정에서만 인터넷 연결이 필요하며, 이후 실행부터는 설치된 환경을 그대로 사용합니다.
+
+구형 Excel 원장인 `.xls`와 새 형식인 `.xlsx`를 모두 지원합니다. `.xls` 파일은 자동 설치되는 `xlrd`로 읽습니다.
+
 4. 물어보는 창에 월을 입력합니다.
 
 ```text
@@ -51,6 +55,7 @@ data\2026-06\output
 더블클릭 대신 터미널에서 실행할 수도 있습니다.
 
 ```powershell
+python -m pip install -r requirements.txt
 python monthly_report_final.py --month 6
 ```
 

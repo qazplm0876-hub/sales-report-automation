@@ -456,6 +456,14 @@ def _format_customers(customers, unit):
     return ", ".join([f"{name}({amt:,.0f}{unit})" for name, amt in customers])
 
 
+def _join_korean(items):
+    if not items:
+        return ""
+    if len(items) == 1:
+        return items[0]
+    return ", ".join(items[:-1]) + " 및 " + items[-1]
+
+
 def _get_rep_product_changes(
     sub, rep_col, rep, amt_col, prev_m, curr_m, max_lv1=4, max_lv2=3
 ):
@@ -533,7 +541,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
         if 구분 == '수출':
             구분_list = EXPORT_SALES_TYPES
             amt_col = '달러금액'
-            unit = '$K'
+            unit = 'K'
             rep_col = '담당자(세부)명'
         else:
             구분_list = ['내수']
@@ -570,9 +578,51 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
                 rep_changes.append((rep, p, c, pct))
         rep_changes.sort(key=lambda row: abs(row[2] - row[1]), reverse=True)
 
+        def factor_clause(item, direction, customer_month):
+            customers = get_top_customers(
+                cdf, 부문, item['rep'], item['lv2'], customer_month,
+                구분=구분, n=top_n,
+            )
+            destination = _format_customers(customers, unit)
+            rep_text = f"{item['rep']} 지역" if 구분 == '수출' else item['rep']
+            if destination:
+                cause = f"{rep_text}의 {destination} 향 실적 {direction}"
+            else:
+                cause = f"{rep_text}의 실적 {direction}"
+            return f"{item['lv2']} {direction}는 {cause}"
+
+        total_direction = "증가" if total_delta >= 0 else "감소"
+        narrative = (
+            f"전체 실적은 {_format_change(prev_tot, curr_tot, unit)}로 "
+            f"전월 대비 {total_direction}하였음."
+        )
+        if total_delta >= 0:
+            main_factors = [
+                factor_clause(item, "증가", curr_m)
+                for item in growth_factors[:2]
+            ]
+            offset_factors = [
+                factor_clause(item, "감소", prev_m)
+                for item in decline_factors[:2]
+            ]
+        else:
+            main_factors = [
+                factor_clause(item, "감소", prev_m)
+                for item in decline_factors[:2]
+            ]
+            offset_factors = [
+                factor_clause(item, "증가", curr_m)
+                for item in growth_factors[:2]
+            ]
+
+        if main_factors:
+            narrative += f" {_join_korean(main_factors)}가 주요하게 작용하였음."
+        if offset_factors:
+            narrative += f" 반면 {_join_korean(offset_factors)}가 일부 상쇄하였음."
+
         lines = [
             "**한눈에 보기**",
-            f"- 실적: {_format_change(prev_tot, curr_tot, unit)}",
+            narrative,
         ]
 
         if lv1_changes:
@@ -601,7 +651,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
                 )
                 cust_str = _format_customers(customers, unit)
                 if cust_str:
-                    lines.append(f"   - END USER: {cust_str}")
+                    lines.append(f"   - {cust_str} 향 실적")
 
         append_factor_section("주요 증가 요인", growth_factors, curr_m)
         append_factor_section("주요 감소 요인", decline_factors, prev_m)
@@ -643,7 +693,7 @@ def generate_comment_with_customers(df, cdf, 부문, months, top_n=2):
                 )
                 cust_str = _format_customers(customers, unit)
                 if cust_str:
-                    line += f" (전월 END USER: {cust_str})"
+                    line += f" ({cust_str} 향 전월 실적)"
                 lines.append(line)
 
         driver = growth_factors[0] if total_delta >= 0 and growth_factors else (
