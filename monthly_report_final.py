@@ -30,10 +30,13 @@
 """
 
 from openpyxl import load_workbook
+from openpyxl.utils import get_column_letter
 import argparse
 import os
 import pandas as pd
 import shutil
+
+from sales_rules import steel_gs_weight
 
 
 def _parse_args():
@@ -398,7 +401,7 @@ def fill_section2(ws4, ws_hs, ws_st, ws_jg, ws_cd, ws_vn, ws_dc, df26, df25, mon
         s4(49,col,raw_kg(df,'STS', '수출',ST_LVL1))
         s4(51,col,raw_kg(df,'제강','수출',JG_LVL1,WR))
         s4(52,col,raw_kg(df,'제강','수출',JG_LVL1,CC))
-        s4(53,col,raw_kg(df,'제강',['수출','내수'],['스틸ＳＴ'],GS))  # GS 수출+내수 합산
+        s4(53,col,steel_gs_weight(df,'수출'))
         s4(54,col,raw_kg(df,'제강','수출',JG_LVL1,WIRE))
         s4(55,col,raw_kg(df,'제강','수출',JG_LVL1,OT))
         s4(56,col,raw_kg(df,'제강','수출',JG_LVL1,IT))
@@ -406,7 +409,7 @@ def fill_section2(ws4, ws_hs, ws_st, ws_jg, ws_cd, ws_vn, ws_dc, df26, df25, mon
         s4(59,col,raw_kg(df,'STS', '내수',ST_LVL1))
         s4(61,col,raw_kg(df,'제강','내수',JG_LVL1,WR))
         s4(62,col,raw_kg(df,'제강','내수',JG_LVL1,CC))
-        s4(63,col,raw_kg(df,'제강','내수',JG_LVL1,GS) + raw_kg(df,'제강','내수',['스틸ＳＴ'],GS))
+        s4(63,col,steel_gs_weight(df,'내수'))
         s4(64,col,raw_kg(df,'제강','내수',JG_LVL1,WIRE))
         s4(65,col,raw_kg(df,'제강','내수',JG_LVL1,OT))
         s4(66,col,raw_kg(df,'제강','내수',JG_LVL1,IT))
@@ -672,21 +675,32 @@ def verify_report(ws4, df26, df25, section4_available=True):
     print(f"  {MONTH}월 검증 리포트")
     print("="*60)
 
+    def check_sum_formula(row, detail_rows, col):
+        cell_value = ws4.cell(row, col).value
+        detail_sum = sum(ws4.cell(r, col).value or 0 for r in detail_rows)
+        if isinstance(cell_value, str) and cell_value.startswith('='):
+            formula = cell_value.upper().replace('$', '')
+            col_letter = get_column_letter(col)
+            expected_refs = [f"{col_letter}{r}" for r in detail_rows]
+            formula_ok = all(ref in formula for ref in expected_refs)
+            status = "OK (수식참조)" if formula_ok else "X 수식참조 확인"
+        else:
+            diff = abs(float(cell_value or 0) - detail_sum)
+            status = "OK" if diff < 1 else f"X 차이={diff:.1f}"
+        return detail_sum, status
+
     # 섹션1 합계 검증
     labels = {
         '수출$당월': (10,5), '수출$전년': (10,8), '수출$당해': (10,10),
         '내수당월':  (19,5), '내수전년':  (19,8), '내수당해':  (19,10),
     }
-    write("[섹션1 소계 검증] 수식셀 값 vs 수동합산", size=12, bold=True)
-    print("\n[섹션1 소계 검증] 수식셀 값 vs 수동합산")
+    write("[섹션1 소계 검증] 수식 참조 및 상세합계", size=12, bold=True)
+    print("\n[섹션1 소계 검증] 수식 참조 및 상세합계")
     for label, (row, col) in labels.items():
-        cell_val = ws4.cell(row, col).value or 0
-        sum_val  = sum(ws4.cell(r, col).value or 0 for r in [row-3, row-2, row-1])
-        diff = round(abs(cell_val - sum_val), 1)
-        status = "OK" if diff < 1 else "X 차이있음"
-        line = f"  {label:12s}: 셀={cell_val:>10.1f} | 합산={sum_val:>10.1f} | {status}"
+        sum_val, status = check_sum_formula(row, [row-3, row-2, row-1], col)
+        line = f"  {label:12s}: 상세합계={sum_val:>10.1f} | {status}"
         write(line, size=10, indent=10)
-        print(f"  {label:12s}: 셀={cell_val:>10.1f} | 합산={sum_val:>10.1f} | {status}")
+        print(line)
 
     y -= 10
     if section4_available:
@@ -698,13 +712,10 @@ def verify_report(ws4, df26, df25, section4_available=True):
             ('합섬매출당해', (116, [119,122,125], 7)),
             ('스텐매출당월', (128, [131,134],     4)),
         ]:
-            tot_val = ws4.cell(tot_r, col).value or 0
-            sub_val = sum(ws4.cell(r, col).value or 0 for r in sub_rows)
-            diff = round(abs(tot_val - sub_val), 1)
-            status = "OK" if diff < 1 else f"X 차이={diff}"
-            line = f"  {label:14s}: 통합={tot_val:>10.1f} | 합산={sub_val:>10.1f} | {status}"
+            sub_val, status = check_sum_formula(tot_r, sub_rows, col)
+            line = f"  {label:14s}: 상세합계={sub_val:>10.1f} | {status}"
             write(line, size=10, indent=10)
-            print(f"  {label:14s}: 통합={tot_val:>10.1f} | 합산={sub_val:>10.1f} | {status}")
+            print(line)
     else:
         write("[섹션4 검증 SKIP] 손익 파일 미수령으로 통합손익요약 검증 제외", size=12, bold=True)
         print("\n[SKIP] 섹션4 검증 - 손익 파일 미수령")
@@ -853,7 +864,7 @@ def run():
     wb4.save(OUTPUT_FILE)
 
     # 검증
-    wb4_check = load_workbook(OUTPUT_FILE, data_only=True)
+    wb4_check = load_workbook(OUTPUT_FILE, data_only=False)
     verify_report(wb4_check.worksheets[0], df26, df25, section4_available=section4_available)
 
 # ── 코멘트 자동 생성 ──────────────────────────────────────
@@ -864,7 +875,7 @@ def run():
     try:
         cdf = load_customer_data(CUSTOMER_FILES)
         report = generate_full_report_with_customers(df26, cdf, months)
-        print("[완료] END USER 상세 데이터 반영")
+        print("[완료] 향 실적 상세 데이터 반영")
     except Exception as e:
         print(f"[경고] END USER 상세 데이터 반영 실패: {e}")
         report = generate_full_report(df26, months)
