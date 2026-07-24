@@ -868,25 +868,53 @@ def run():
     verify_report(wb4_check.worksheets[0], df26, df25, section4_available=section4_available)
 
 # ── 코멘트 자동 생성 ──────────────────────────────────────
-    from comment_generator import generate_full_report, generate_full_report_with_customers, load_customer_data
+    from comment_generator import (
+        generate_brief_report_with_customers,
+        generate_full_report_with_customers,
+        load_customer_data,
+    )
     df26['월'] = df26['요청월'].astype(str).str[-2:] + '월'
     df26['부문'] = df26['부문'].replace('STS', '스텐')  # 추가
+    df25['월'] = df25['요청월'].astype(str).str[-2:] + '월'
+    df25['부문'] = df25['부문'].replace('STS', '스텐')
     months = sorted(df26['월'].unique())
     try:
         cdf = load_customer_data(CUSTOMER_FILES)
-        report = generate_full_report_with_customers(df26, cdf, months)
-        print("[완료] 향 실적 상세 데이터 반영")
+        print("[완료] 거래처 증감 및 거래 이력 데이터 반영")
     except Exception as e:
         print(f"[경고] END USER 상세 데이터 반영 실패: {e}")
-        report = generate_full_report(df26, months)
+        cdf = pd.DataFrame()
+
+    report = generate_brief_report_with_customers(
+        df26,
+        df25,
+        cdf,
+        current_year=YEAR,
+        current_month=MONTH,
+    )
+    detailed_report = generate_full_report_with_customers(
+        df26, cdf, months
+    )
+
     comment_file = os.path.join(OUTPUT_DIR, f"코멘트_{MONTH}월.md")
     with open(comment_file, 'w', encoding='utf-8') as f:
         f.write(report)
-    print(f"[완료] 코멘트 초안 저장: {comment_file}")
+    print(f"[완료] 브리핑형 코멘트 저장: {comment_file}")
 
     comment_pdf_file = os.path.join(OUTPUT_DIR, f"코멘트_{MONTH}월.pdf")
     save_comment_pdf(report, comment_pdf_file)
-    print(f"[완료] 코멘트 PDF 저장: {comment_pdf_file}")
+    print(f"[완료] 브리핑형 코멘트 PDF 저장: {comment_pdf_file}")
+
+    detailed_comment_file = os.path.join(
+        OUTPUT_DIR, f"코멘트_{MONTH}월_상세.md"
+    )
+    with open(detailed_comment_file, 'w', encoding='utf-8') as f:
+        f.write(detailed_report)
+    detailed_pdf_file = os.path.join(
+        OUTPUT_DIR, f"코멘트_{MONTH}월_상세.pdf"
+    )
+    save_comment_pdf(detailed_report, detailed_pdf_file)
+    print(f"[완료] 상세 검토용 코멘트 저장: {detailed_pdf_file}")
 
     print(f"\n저장 완료: {OUTPUT_FILE}")
 

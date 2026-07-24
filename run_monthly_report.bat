@@ -8,8 +8,11 @@ echo   Sales report automation
 echo ============================================
 echo.
 echo Input folder:
-echo   data\2026-MM\input
+echo   data\YYYY-MM\input
 echo.
+
+set /p REPORT_YEAR=Enter report year. Press Enter for 2026 :
+if "%REPORT_YEAR%"=="" set "REPORT_YEAR=2026"
 
 set /p REPORT_MONTH=Enter report month. Example 6 : 
 if "%REPORT_MONTH%"=="" (
@@ -69,7 +72,7 @@ if errorlevel 1 (
   )
 )
 
-"%VENV_PY%" monthly_report_final.py --month %REPORT_MONTH%
+"%VENV_PY%" monthly_report_final.py --year %REPORT_YEAR% --month %REPORT_MONTH%
 
 if errorlevel 1 (
   echo.
@@ -80,5 +83,5 @@ if errorlevel 1 (
 
 echo.
 echo Done. Check this output folder:
-echo   data\2026-%REPORT_MONTH_PADDED%\output
+echo   data\%REPORT_YEAR%-%REPORT_MONTH_PADDED%\output
 pause
