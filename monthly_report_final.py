@@ -36,7 +36,7 @@ import os
 import pandas as pd
 import shutil
 
-from sales_rules import steel_gs_weight
+from sales_rules import plan_month_row, steel_gs_weight, ytd_monthly_plan
 
 
 def _parse_args():
@@ -187,16 +187,6 @@ CUSTOMER_FILES = {
 # =============================================
 # 공통 유틸
 # =============================================
-def plan_month_row(month):
-    """월별_사업계획.xlsx 행번호: 1월=6,2월=7,3월=8,(1Q=9),4월=10,..."""
-    return 5 + month + (month-1)//3
-
-def plan_quarter_row(month):
-    """직전 분기 누계행"""
-    quarter = (month-1)//3
-    if quarter == 0: return None
-    return 5 + (quarter*3) + (quarter-1) + 1
-
 def overseas_month_row(month):
     """해외계획 파일 월별 행"""
     return 5 + month + (month-1)//3
@@ -268,22 +258,13 @@ def raw_sales(df, 부문, 내수수출, amt='한국원화금액'):
 # =============================================
 def fill_section1(ws4, wsp, df26, df25, month):
     mr = plan_month_row(month)
-    qr = plan_quarter_row(month)
 
     def vp(row, col): return wsp.cell(row=row, column=col).value or 0
     def s4(row, col, val): ws4.cell(row=row, column=col).value = val
 
     def cum_plan(base_mr, col):
-        """직전분기누계 + 분기내 당월까지 합산
-        base_mr은 해당 부문의 당월 행. 부문 오프셋(base_mr - plan_month_row(month))을 이용해
-        같은 부문의 다른 월/분기 행을 찾는다."""
-        offset = base_mr - plan_month_row(month)
-        local_qr = qr + offset if qr else None
-        q = (month-1)//3; q_start = q*3+1
-        total = (vp(local_qr, col) if local_qr else 0)
-        for m in range(q_start, month+1):
-            total += vp(plan_month_row(m) + offset, col) or 0
-        return total
+        """분기 합계행을 건너뛰고 1월부터 당월까지 월별 계획을 합산한다."""
+        return ytd_monthly_plan(wsp, base_mr, col, month)
 
     ST=23; JG=46; CD=69; VN=92  # 계획파일 섹션별 행 오프셋
 

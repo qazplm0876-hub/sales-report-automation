@@ -15,6 +15,25 @@ COMMENT_THRESHOLDS = {
 }
 
 
+def plan_month_row(month):
+    """월별 사업계획 시트에서 해당 월의 행번호를 반환한다."""
+    if not 1 <= month <= 12:
+        raise ValueError("month 값은 1부터 12 사이여야 합니다.")
+    return 5 + month + (month - 1) // 3
+
+
+def ytd_monthly_plan(ws, base_month_row, column, month):
+    """분기 합계행을 제외하고 1월부터 대상 월까지 월별 계획을 합산한다."""
+    section_offset = base_month_row - plan_month_row(month)
+    return sum(
+        ws.cell(
+            row=plan_month_row(plan_month) + section_offset,
+            column=column,
+        ).value or 0
+        for plan_month in range(1, month + 1)
+    )
+
+
 # 제품판매단가 보고서 83~106행과 동일한 본사 품목 매핑.
 # 원자료 집계와 코멘트 원인탐색이 같은 분류를 사용하도록 한 곳에서 관리한다.
 REPORT_PRODUCT_RULES = [
