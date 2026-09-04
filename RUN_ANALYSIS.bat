@@ -20,15 +20,13 @@ echo.
 echo ============================================================
 echo   월간 매출실적 분석
 echo ============================================================
-echo input 폴더에 공식표 1개, 누계파일 2개, 인수처 파일 12개를 넣어 주세요.
-echo 25_1.xlsx 형식의 전년 인수처 파일 6개는 매달 그대로 보관해도 됩니다.
-echo 월을 비워두면 공식 실적표 제목에서 자동으로 찾습니다.
+echo input\YYYYMM 폴더에 해당 월 원본 9개를 넣어 주세요.
+echo 최신 YYYYMM 폴더와 공식표 제목을 기준으로 분석월을 자동 선택합니다.
+echo 기존처럼 input 폴더 바로 아래에 파일을 넣는 방식도 계속 사용할 수 있습니다.
 echo.
-set /p REPORT_MONTH=분석월 입력 [예: 202607, 자동은 Enter]:
-if "%REPORT_MONTH%"=="" set "REPORT_MONTH=auto"
 
 set "PYTHONPATH=%CD%\src"
-".venv\Scripts\python.exe" -m sales_report --input "%CD%\input" --output "%CD%\output" --month "%REPORT_MONTH%"
+".venv\Scripts\python.exe" -m sales_report --input "%CD%\input" --output "%CD%\output" --month auto
 if errorlevel 1 goto :error
 
 echo.
