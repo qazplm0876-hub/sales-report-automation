@@ -1,0 +1,116 @@
+version: 2
+
+# 보고 순서는 필요하면 이 목록만 바꾸면 됩니다.
+report_order:
+  - steel_domestic
+  - steel_export
+  - stainless_export
+  - stainless_domestic
+  - synthetic_domestic
+  - synthetic_export
+
+segments:
+  steel_domestic:
+    label: 제강 내수
+    company: steel
+    market: domestic
+    primary_level: 2
+    secondary_level: 2
+    recipient_analysis_exclusions:
+      level2:
+        - CONTROL CABLE
+      item_code_2:
+        - CCG
+  steel_export:
+    label: 제강 수출
+    company: steel
+    market: export
+    primary_level: 2
+    secondary_level: 2
+    recipient_analysis_exclusions:
+      level2:
+        - CONTROL CABLE
+      item_code_2:
+        - CCG
+  stainless_export:
+    label: 스텐 수출
+    company: stainless
+    market: export
+    primary_level: 1
+    secondary_level: 2
+  stainless_domestic:
+    label: 스텐 내수
+    company: stainless
+    market: domestic
+    primary_level: 1
+    secondary_level: 2
+  synthetic_domestic:
+    label: 합섬 내수
+    company: synthetic
+    market: domestic
+    primary_level: 1
+    secondary_level: 2
+  synthetic_export:
+    label: 합섬 수출
+    company: synthetic
+    market: export
+    primary_level: 1
+    secondary_level: 2
+
+display_names:
+  SPECIAL ROPE 1: SR1
+  SPECIAL ROPE 2: SR2
+  합섬방사: 방사
+  합섬비방사: 비방사
+  합섬웨빙: 웨빙
+
+# 사업계획대비매출실적분석 작성 기준: 계정 6은 판매금액과 중량에서 제외합니다.
+excluded_accounts:
+  - 6
+
+# 제품판매중량은 상품 분류를 제외합니다. 판매금액에는 상품 매출을 포함합니다.
+product_weight_exclusions:
+  level1_contains:
+    - 상품
+
+thresholds:
+  official_reconciliation_warning_pct: 0.1
+  unit_price_question_pct: 10.0
+  large_amount_change:
+    domestic: 100
+    export: 100
+
+output:
+  top_primary_items_per_direction: 4
+  top_recipients_per_item_direction: 5
+  monthly_trend_recipients_per_segment: 14
+  focus_primary_items_max: 4
+  focus_primary_coverage_ratio: 0.8
+  focus_secondary_items_max: 2
+  focus_secondary_coverage_ratio: 0.8
+  focus_secondary_offset_min_share: 0.15
+  narrative_recipients_per_secondary: 3
+  narrative_main_recipients_per_secondary: 2
+  recipient_driver_coverage_ratio: 0.75
+  recipient_offset_min_share: 0.2
+  narrative_regions_per_direction: 2
+  narrative_region_details_max: 2
+  recipient_mix_shift:
+    enabled: true
+    # 누계까지 추가하면 문안이 길어지므로 전월 대비에서만 구성 변화를 탐지합니다.
+    comparisons:
+      - 전월 대비
+    minimum_side_amount:
+      domestic: 100
+      export: 100
+    minimum_gross_amount:
+      domestic: 250
+      export: 250
+    minimum_balance_ratio: 0.35
+    maximum_net_share: 0.35
+    minimum_driver_share: 0.08
+    max_products_per_segment_comparison: 2
+    increase_recipients_max: 3
+    decrease_recipients_max: 2
+    price_divergence_min_pct: 0.10
+    price_divergence_notes_max: 1
