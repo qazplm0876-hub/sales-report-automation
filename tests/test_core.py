@@ -6,6 +6,7 @@ from openpyxl import Workbook
 
 from sales_report.config import load_config
 from sales_report.analysis import _detect_recipient_mix_shift, _status_for_monthly, _status_for_ytd
+from sales_report.cli import resolve_input_dir
 from sales_report.input_loader import (
     CUMULATIVE_REQUIRED_HEADERS,
     RECIPIENT_REQUIRED_HEADERS,
@@ -31,6 +32,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class UtilityTests(unittest.TestCase):
+    def test_monthly_input_directory_selection_and_legacy_fallback(self):
+        with TemporaryDirectory() as temp:
+            input_root = Path(temp) / "input"
+            input_root.mkdir()
+            self.assertEqual(resolve_input_dir(input_root, "auto"), input_root)
+
+            (input_root / "202607").mkdir()
+            (input_root / "202608").mkdir()
+            self.assertEqual(resolve_input_dir(input_root, "auto"), input_root / "202608")
+            self.assertEqual(resolve_input_dir(input_root, "202607"), input_root / "202607")
+            with self.assertRaisesRegex(ValueError, "입력자료 폴더가 없습니다"):
+                resolve_input_dir(input_root, "202609")
+
     def test_previous_period_crosses_year(self):
         self.assertEqual(previous_period("202601"), "202512")
         self.assertEqual(previous_period("202606"), "202605")
