@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import re
+import subprocess
 import sys
 import traceback
 from pathlib import Path
@@ -51,6 +53,37 @@ def _configure_logging(log_path: Path):
         handlers=[logging.FileHandler(log_path, encoding="utf-8")],
         force=True,
     )
+
+
+def write_completed_official_report(input_dir: Path, output_dir: Path, year: int, month: int) -> Path:
+    """Restore the established report template alongside the new detailed analysis workbook."""
+    repository_root = Path(__file__).resolve().parents[2]
+    script_path = repository_root / "monthly_report_final.py"
+    completed_path = output_dir / f"사업계획대비매출실적분석 ({str(year)[-2:]}년 {month}월)_완성.xlsx"
+    environment = os.environ.copy()
+    environment["PYTHONPATH"] = str(repository_root) + os.pathsep + environment.get("PYTHONPATH", "")
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script_path),
+            "--year", str(year),
+            "--month", str(month),
+            "--input-dir", str(input_dir),
+            "--output-dir", str(output_dir),
+        ],
+        cwd=repository_root,
+        env=environment,
+        text=True,
+        capture_output=True,
+    )
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.returncode:
+        detail = result.stderr.strip() or "기존 양식 완성본 생성이 실패했습니다."
+        raise RuntimeError(detail)
+    if not completed_path.exists():
+        raise RuntimeError(f"기존 양식 완성본이 생성되지 않았습니다: {completed_path.name}")
+    return completed_path
 
 
 def run(args) -> tuple[Path, Path]:
@@ -109,6 +142,9 @@ def run(args) -> tuple[Path, Path]:
     markdown_path = run_dir / f"{target_period}_보고용_초안.md"
     write_analysis_workbook(workbook_path, analysis, official, config)
     markdown_path.write_text(build_markdown(analysis, official, config), encoding="utf-8-sig")
+    completed_official_path = write_completed_official_report(
+        input_dir, run_dir, official.year, official.month
+    )
 
     logging.info("MODEL STATUS %s", analysis["model_status"])
     for check in analysis["checks"]:
@@ -123,7 +159,9 @@ def run(args) -> tuple[Path, Path]:
             check["match_pct"],
         )
     logging.info("OUTPUT workbook=%s markdown=%s", workbook_path, markdown_path)
+    logging.info("OUTPUT completed_official_report=%s", completed_official_path)
     print(f"[6/6] 완료: {workbook_path}")
+    print(f"[6/6] 기존 양식 완성본: {completed_official_path}")
     if analysis["model_status"] == "WARN":
         print("주의: 공식표와 누계파일 계산값에 차이가 있어 검산 시트에 WARN을 표시했습니다.")
     return workbook_path, markdown_path
