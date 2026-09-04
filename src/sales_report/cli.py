@@ -15,6 +15,25 @@ from .official import parse_official_report
 from .workbook_writer import write_analysis_workbook
 
 
+def resolve_input_dir(input_root: Path, target_month: str) -> Path:
+    """Choose a dated monthly folder, while retaining the existing flat layout."""
+    if not input_root.exists():
+        raise ValueError(f"input 폴더가 없습니다: {input_root}")
+
+    monthly_dirs = sorted(
+        (path for path in input_root.iterdir() if path.is_dir() and re.fullmatch(r"20\d{4}", path.name)),
+        key=lambda path: path.name,
+    )
+    if not monthly_dirs:
+        return input_root
+    if target_month != "auto":
+        selected = input_root / target_month
+        if not selected.is_dir():
+            raise ValueError(f"입력자료 폴더가 없습니다: {selected.name} (input 아래에 YYYYMM 폴더를 만들어 주세요.)")
+        return selected
+    return monthly_dirs[-1]
+
+
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="월간 매출실적 분석 자동화")
     parser.add_argument("--input", type=Path, default=Path("input"), help="원본 엑셀 폴더")
@@ -35,11 +54,13 @@ def _configure_logging(log_path: Path):
 
 
 def run(args) -> tuple[Path, Path]:
-    input_dir = args.input.resolve()
+    input_root = args.input.resolve()
+    input_dir = resolve_input_dir(input_root, args.month)
     output_root = args.output.resolve()
-    if not input_dir.exists():
-        raise ValueError(f"input 폴더가 없습니다: {input_dir}")
     config = load_config(args.config.resolve())
+
+    if input_dir != input_root:
+        print(f"[0/6] 월별 입력폴더 자동 선택: {input_dir.name}")
 
     official_path = discover_official(input_dir)
     print(f"[1/6] 공식 실적표 확인: {official_path.name}")
@@ -53,6 +74,11 @@ def run(args) -> tuple[Path, Path]:
         target_period = args.month
         if target_period != official_period:
             raise ValueError(f"입력한 분석월({target_period})과 공식 실적표 제목({official_period})이 다릅니다.")
+    if input_dir != input_root and input_dir.name != target_period:
+        raise ValueError(
+            f"입력폴더명({input_dir.name})과 공식 실적표 분석월({target_period})이 다릅니다. "
+            "폴더명 또는 공식표를 확인해 주세요."
+        )
     print(f"[2/6] 분석월 확정: {target_period}")
 
     manifest = discover_inputs(input_dir, official_path, official.year, config)
