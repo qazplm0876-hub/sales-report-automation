@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import argparse
 import shutil
-from collections import Counter, defaultdict
+from collections import defaultdict
 from copy import copy
 from dataclasses import dataclass
 from datetime import datetime
@@ -138,6 +138,25 @@ def _matches(record: dict, mapping: Mapping) -> bool:
     return True
 
 
+def _percentile(values: list[float], ratio: float) -> float:
+    positives = sorted(abs(value) for value in values if abs(value) > 1e-12)
+    if not positives:
+        return 0.0
+    return positives[min(len(positives) - 1, int((len(positives) - 1) * ratio))]
+
+
+def _source_unit_divisors(market: str, amounts: list[float], weights: list[float]) -> tuple[float, float]:
+    """Detect source units (kg/USD/won) versus report units (ton/KUSD/million won)."""
+    amount_p90 = _percentile(amounts, 0.90)
+    weight_p90 = _percentile(weights, 0.90)
+    if market == "export":
+        amount_divisor = 1_000.0 if amount_p90 >= 1_000 else 1.0
+    else:
+        amount_divisor = 1_000_000.0 if amount_p90 >= 100_000 else 1.0
+    weight_divisor = 1_000.0 if weight_p90 >= 1_000 else 1.0
+    return amount_divisor, weight_divisor
+
+
 def _read_records(paths: Iterable[Path], mappings: list[Mapping], target_year: int, target_month: int) -> tuple[list[dict], list[dict]]:
     records: list[dict] = []
     sources: list[dict] = []
@@ -149,57 +168,95 @@ def _read_records(paths: Iterable[Path], mappings: list[Mapping], target_year: i
         workbook = load_workbook(path, read_only=True, data_only=True, keep_links=False)
         worksheet = workbook[sheet_name]
         index = {name: position for position, name in enumerate(headers) if name}
-        kept = excluded = 0
+        pending: list[dict] = []
+        stats = defaultdict(lambda: {"source_rows": 0, "excluded": 0, "unmapped": 0, "duplicate": 0, "kept": 0})
         try:
             for source_row, row in enumerate(worksheet.iter_rows(min_row=header_row + 1, values_only=True), header_row + 1):
                 raw = {name: row[pos] if pos < len(row) else None for name, pos in index.items()}
                 period = normalize_period(raw.get("요청월"))
                 if len(period) != 6 or not period.isdigit():
-                    excluded += 1
                     continue
                 year, month = int(period[:4]), int(period[4:])
                 if year not in {target_year - 1, target_year} or month > target_month:
-                    excluded += 1
                     continue
+                stats[year]["source_rows"] += 1
                 if int(number(raw.get("계정"))) == 6:
-                    excluded += 1
+                    stats[year]["excluded"] += 1
                     continue
-                matched = next((item for item in mappings if _matches(raw, item)), None)
-                if not matched:
-                    excluded += 1
+                matched_items = [item for item in mappings if _matches(raw, item)]
+                if not matched_items:
+                    stats[year]["unmapped"] += 1
                     continue
-                weight_kg = number(raw.get("중량"))
-                amount = number(raw.get("달러금액")) if matched.amount_basis == "달러금액" else number(raw.get("한국원화금액"))
-                if not weight_kg:
-                    excluded += 1
-                    continue
-                analyst = text(raw.get("담당자(세부)명")) or text(raw.get("담당자명")) or "담당자없음"
-                short_name = text(raw.get("약어명")) or text(raw.get("품명")) or text(raw.get("품번2")) or "(미지정)"
-                record = {
-                    **raw,
-                    "원본파일": path.name,
-                    "원본행": source_row,
-                    "연도": year,
-                    "연월": period,
-                    "보고서행": matched.report_row,
-                    "보고서구분": matched.report_group,
-                    "보고서품목": matched.report_product,
-                    "분석대상": "Y",
-                    "제외사유": "",
-                    "분석담당자": analyst,
-                    "약어명": short_name,
-                    "중량(톤)": weight_kg / 1000,
-                    "분석금액": amount / 1000 if matched.amount_basis == "달러금액" else amount / 1_000_000,
-                    "금액단위": "KUSD" if matched.amount_basis == "달러금액" else "백만원",
-                    "단가단위": matched.unit,
-                }
-                record["행단가"] = record["분석금액"] / record["중량(톤)"] if record["중량(톤)"] else None
-                record["특이값플래그"] = "음수중량 · 음수금액" if weight_kg < 0 and amount < 0 else "정상"
-                records.append(record)
-                kept += 1
+                if len(matched_items) > 1:
+                    stats[year]["duplicate"] += 1
+                matched = matched_items[0]
+                market = "export" if matched.amount_basis == "달러금액" else "domestic"
+                pending.append({
+                    "raw": raw,
+                    "source_row": source_row,
+                    "period": period,
+                    "year": year,
+                    "mapping": matched,
+                    "market": market,
+                    "amount": number(raw.get(matched.amount_basis)),
+                    "weight": number(raw.get("중량")),
+                })
+                stats[year]["kept"] += 1
         finally:
             workbook.close()
-        sources.append({"file": path.name, "sheet": sheet_name, "kept": kept, "excluded": excluded})
+
+        grouped = defaultdict(lambda: {"amounts": [], "weights": []})
+        for item in pending:
+            group = grouped[(item["year"], item["market"])]
+            group["amounts"].append(item["amount"])
+            group["weights"].append(item["weight"])
+        divisors = {
+            key: _source_unit_divisors(key[1], values["amounts"], values["weights"])
+            for key, values in grouped.items()
+        }
+
+        for item in pending:
+            raw = item["raw"]
+            matched = item["mapping"]
+            amount_divisor, weight_divisor = divisors[(item["year"], item["market"])]
+            weight, amount = item["weight"], item["amount"]
+            analyst = text(raw.get("담당자(세부)명")) or text(raw.get("담당자명")) or "담당자없음"
+            short_name = text(raw.get("약어명")) or text(raw.get("품명")) or text(raw.get("품번2")) or "(미지정)"
+            flags = []
+            if weight < 0:
+                flags.append("음수중량")
+            if amount < 0:
+                flags.append("음수금액")
+            if not weight and amount:
+                flags.append("중량0·금액있음")
+            if weight and not amount:
+                flags.append("금액0")
+            unit_system = "kg·USD·원" if weight_divisor == 1_000 else "톤·KUSD·백만원"
+            record = {
+                **raw,
+                "원본파일": path.name,
+                "원본행": item["source_row"],
+                "연도": item["year"],
+                "연월": item["period"],
+                "보고서행": matched.report_row,
+                "보고서구분": matched.report_group,
+                "보고서품목": matched.report_product,
+                "분석대상": "Y",
+                "제외사유": "",
+                "분석담당자": analyst,
+                "약어명": short_name,
+                "중량(톤)": weight / weight_divisor,
+                "분석금액": amount / amount_divisor,
+                "금액단위": "KUSD" if item["market"] == "export" else "백만원",
+                "단가단위": matched.unit,
+                "원본단위체계": unit_system,
+            }
+            record["행단가"] = record["분석금액"] / record["중량(톤)"] if record["중량(톤)"] else None
+            record["특이값플래그"] = " · ".join(flags) if flags else "정상"
+            records.append(record)
+
+        for year, values in stats.items():
+            sources.append({"file": path.name, "sheet": sheet_name, "year": year, **values})
     if not records:
         raise ValueError("분석대상으로 매핑된 거래행이 없습니다. 누계 Raw 파일과 분류맵을 확인해 주세요.")
     return records, sources
@@ -233,25 +290,48 @@ def _components(baseline: list[dict], compared: list[dict]) -> list[dict]:
 
     left, left_meta = grouped(baseline)
     right, right_meta = grouped(compared)
-    total_w0, total_a0, total_p0 = _metrics(baseline)
-    total_w1, total_a1, total_p1 = _metrics(compared)
+    total_w0, _, total_p0 = _metrics(baseline)
+    total_w1, _, total_p1 = _metrics(compared)
+    if total_p0 is None or total_p1 is None:
+        return []
     result = []
     for key in sorted(set(left) | set(right)):
         w0, a0 = left[key]
         w1, a1 = right[key]
+        if not w0 and not w1:
+            continue
         p0, p1 = (a0 / w0 if w0 else None), (a1 / w1 if w1 else None)
         share0, share1 = (w0 / total_w0 if total_w0 else 0), (w1 / total_w1 if total_w1 else 0)
-        mix = (share1 - share0) * ((p0 if p0 is not None else total_p0 or 0) - (total_p0 or 0))
-        price = share1 * ((p1 or 0) - (p0 or 0))
+        reference_price = p0 if p0 is not None else p1
+        mix = (share1 - share0) * ((reference_price or total_p0) - total_p0)
+        price = share1 * (p1 - p0) if p0 is not None and p1 is not None else 0.0
         total = mix + price
         meta = right_meta.get(key) or left_meta.get(key) or {}
         status = "계속" if w0 and w1 else ("신규" if w1 else "중단")
+        if status == "신규":
+            cause = "고단가 신규" if (p1 or 0) >= total_p0 else "저단가 신규"
+        elif status == "중단":
+            cause = "고단가 중단" if (p0 or 0) >= total_p0 else "저단가 중단"
+        elif abs(price) > abs(mix):
+            cause = "제품단가 상승" if price >= 0 else "제품단가 하락"
+        else:
+            level = "고단가" if (p0 or 0) >= total_p0 else "저단가"
+            cause = f"{level} 비중{'↑' if share1 >= share0 else '↓'}"
         result.append({
             "약어명": key[0], "분석담당자": key[1], "레벨1명": key[2], "레벨2명": key[3],
             "담당자명": text(meta.get("담당자명")), "담당자(세부)명": text(meta.get("담당자(세부)명")),
             "상태": status, "기준중량": w0, "비교중량": w1, "기준비중": share0, "비교비중": share1,
             "기준제품단가": p0, "비교제품단가": p1, "믹스효과": mix, "가격효과": price,
-            "총단가기여도": total, "영향절대값": abs(total),
+            "총단가기여도": total, "영향절대값": abs(total), "원인유형": cause,
+        })
+    residual = (total_p1 - total_p0) - sum(item["총단가기여도"] for item in result)
+    if abs(residual) > 1e-10:
+        result.append({
+            "약어명": "(중량0 금액효과)", "분석담당자": "-", "레벨1명": "-", "레벨2명": "-",
+            "담당자명": "", "담당자(세부)명": "", "상태": "대사조정", "기준중량": 0.0,
+            "비교중량": 0.0, "기준비중": 0.0, "비교비중": 0.0, "기준제품단가": None,
+            "비교제품단가": None, "믹스효과": 0.0, "가격효과": residual,
+            "총단가기여도": residual, "영향절대값": abs(residual), "원인유형": "중량0 금액효과",
         })
     return sorted(result, key=lambda item: item["영향절대값"], reverse=True)
 
@@ -299,7 +379,7 @@ def _write_raw_sheet(workbook, records: list[dict], target_year: int, target_mon
         "단가단위", "행단가", "특이값플래그",
     ]
     worksheet.cell(1, 1).value = f"가공데이터 | {target_year - 1}년·{target_year}년 Raw 통합 + 동일 단위·보고서 매핑·담당자·특이값"
-    worksheet.cell(2, 1).value = f"{target_year - 1}년과 {target_year}년 모두 kg÷1,000·USD÷1,000·원÷1,000,000으로 정규화합니다. 분석기간은 1~{target_month}월입니다."
+    worksheet.cell(2, 1).value = f"연도별 Raw 단위체계를 자동 판별해 톤·KUSD·백만원으로 정규화합니다. 분석기간은 1~{target_month}월입니다."
     for column, header in enumerate(headers, 1):
         worksheet.cell(3, column).value = header
     if worksheet.max_row >= 4:
@@ -312,7 +392,7 @@ def _write_raw_sheet(workbook, records: list[dict], target_year: int, target_mon
             record.get("레벨2명"), record.get("LVL3"), record.get("레벨3명"), record.get("LVL4"), record.get("레벨4명"), record.get("품번1"),
             record.get("품번2"), record.get("품번3"), record.get("약어명"), record.get("등급"), record.get("계정"), record.get("중량"),
             record.get("원화금액"), record.get("달러금액"), record.get("한국원화금액"), record.get("원본파일"), record.get("원본행"),
-            record.get("연도"), record.get("연월"), "kg·USD·원", record.get("회사"), record.get("내수/수출"), record.get("부문"),
+            record.get("연도"), record.get("연월"), record.get("원본단위체계"), record.get("회사"), record.get("내수/수출"), record.get("부문"),
             record.get("보고서행"), record.get("보고서구분"), record.get("보고서품목"), record.get("분석대상"), record.get("제외사유"),
             record.get("분석담당자"), record.get("중량(톤)"), record.get("분석금액"), record.get("금액단위"), record.get("단가단위"),
             record.get("행단가"), record.get("특이값플래그"),
@@ -325,12 +405,9 @@ def _write_raw_sheet(workbook, records: list[dict], target_year: int, target_mon
 def _cause_summary(components: list[dict], direction: int) -> tuple[str, str, str, float]:
     candidates = [item for item in components if item["총단가기여도"] * direction > 0]
     if not candidates:
-        return "-", "-", "-", 0.0
+        return None, None, None, None
     item = candidates[0]
-    if item["상태"] == "신규": kind = "고단가 신규" if direction > 0 else "저단가 신규"
-    elif item["상태"] == "중단": kind = "저단가 중단" if direction > 0 else "고단가 중단"
-    else: kind = "고단가 비중↑" if direction > 0 else "고단가 비중↓"
-    return item["약어명"], item["분석담당자"], kind, item["총단가기여도"]
+    return item["약어명"], item["분석담당자"], item["원인유형"], item["총단가기여도"]
 
 
 def _write_ytd_sheet(workbook, mappings: list[Mapping], records: list[dict], target_year: int, target_month: int):
@@ -396,45 +473,61 @@ def _write_yearly_scans(workbook, mappings: list[Mapping], records: list[dict], 
     _reset_table(mom, rows, len(headers))
 
 
+def _comparison_specs(target_year: int, target_month: int):
+    specs = [
+        ("누계비", f"{target_year - 1}→{target_year}", f"{target_year - 1} 1~{target_month}월→{target_year} 1~{target_month}월", range(1, target_month + 1), target_year - 1, range(1, target_month + 1), target_year),
+    ]
+    for month in range(1, target_month + 1):
+        specs.append((
+            "전년동월비", f"{target_year - 1}→{target_year}", f"{target_year - 1} {month}월→{target_year} {month}월",
+            range(month, month + 1), target_year - 1, range(month, month + 1), target_year,
+        ))
+    for year in (target_year - 1, target_year):
+        for month in range(2, target_month + 1):
+            specs.append((
+                "전월비", str(year), f"{year} {month - 1}월→{year} {month}월",
+                range(month - 1, month), year, range(month, month + 1), year,
+            ))
+    return specs
+
+
 def _write_cause_sheets(workbook, mappings: list[Mapping], records: list[dict], target_year: int, target_month: int):
     summary_rows, detail_rows = [], []
-    comparison_specs = [
-        ("누계비", f"{target_year - 1}→{target_year}", f"{target_year - 1} 1~{target_month}월→{target_year} 1~{target_month}월", range(1, target_month + 1), target_year - 1, range(1, target_month + 1), target_year),
-        ("전년동월비", f"{target_year - 1}→{target_year}", f"{target_year - 1} {target_month}월→{target_year} {target_month}월", range(target_month, target_month + 1), target_year - 1, range(target_month, target_month + 1), target_year),
-        ("전월비", str(target_year), f"{target_year} {target_month - 1}월→{target_year} {target_month}월", range(target_month - 1, target_month), target_year, range(target_month, target_month + 1), target_year),
-    ]
     for mapping in mappings:
-        for kind, basis_year, period_label, left_months, left_year, right_months, right_year in comparison_specs:
+        for kind, basis_year, period_label, left_months, left_year, right_months, right_year in _comparison_specs(target_year, target_month):
             baseline = _period_records(records, mapping.report_row, left_year, left_months)
             compared = _period_records(records, mapping.report_row, right_year, right_months)
             w0, _, p0 = _metrics(baseline); w1, _, p1 = _metrics(compared)
             rate = _pct(p1, p0)
-            if rate is None:
-                continue
             key = f"{kind} | {period_label} | {mapping.report_row} | {mapping.report_group} | {mapping.report_product}"
-            components = _components(baseline, compared)
+            components = _components(baseline, compared) if p0 is not None and p1 is not None else []
             up = _cause_summary(components, 1); down = _cause_summary(components, -1)
+            price_change = p1 - p0 if p0 is not None and p1 is not None else None
+            reconciliation = (
+                sum(item["총단가기여도"] for item in components) - price_change
+                if price_change is not None else None
+            )
             summary_rows.append([
-                0, "확인" if abs(rate) >= 0.1 else "", kind, basis_year, key, period_label, mapping.report_row, mapping.report_group,
-                mapping.report_product, mapping.unit, p0, p1, (p1 or 0) - (p0 or 0), rate, w0, w1, _pct(w1, w0),
+                0, "확인" if rate is not None and abs(rate) >= 0.1 else "", kind, basis_year, key, period_label, mapping.report_row, mapping.report_group,
+                mapping.report_product, mapping.unit, p0, p1, price_change, rate, w0, w1, _pct(w1, w0),
                 sum(1 for item in components if item["상태"] == "신규"), sum(1 for item in components if item["상태"] == "중단"),
-                *up, *down, sum(item["총단가기여도"] for item in components), "",
+                *up, *down, reconciliation,
+                "전체판매없음·효과N/A" if p0 is None or p1 is None else ("금액0" if p0 == 0 or p1 == 0 else ""),
             ])
             for rank, item in enumerate(components, 1):
                 direction = "단가상승" if item["총단가기여도"] >= 0 else "단가하락"
-                if item["상태"] == "신규": cause = "고단가 신규" if item["총단가기여도"] >= 0 else "저단가 신규"
-                elif item["상태"] == "중단": cause = "저단가 중단" if item["총단가기여도"] >= 0 else "고단가 중단"
-                else: cause = "고단가 비중↑" if item["총단가기여도"] >= 0 else "고단가 비중↓"
                 detail_rows.append([
                     key, kind, f"{left_year}{min(left_months):02d}~{left_year}{max(left_months):02d}", f"{right_year}{min(right_months):02d}~{right_year}{max(right_months):02d}",
-                    period_label, mapping.report_row, mapping.report_group, mapping.report_product, rank, direction, cause, item["상태"],
+                    period_label, mapping.report_row, mapping.report_group, mapping.report_product, rank, direction, item["원인유형"], item["상태"],
                     item["약어명"], item["분석담당자"], item["레벨1명"], item["레벨2명"], item["담당자명"], item["담당자(세부)명"],
                     p0, p1, rate, item["기준중량"], item["비교중량"], item["기준비중"], item["비교비중"], item["비교비중"] - item["기준비중"],
                     item["기준제품단가"], item["비교제품단가"],
-                    (item["비교제품단가"] or 0) - (item["기준제품단가"] or 0), item["믹스효과"], item["가격효과"], item["총단가기여도"],
-                    item["영향절대값"], item["총단가기여도"] / rate if rate else None, "정상",
+                    item["비교제품단가"] - item["기준제품단가"] if item["비교제품단가"] is not None and item["기준제품단가"] is not None else None,
+                    item["믹스효과"], item["가격효과"], item["총단가기여도"],
+                    item["영향절대값"], item["총단가기여도"] / price_change if price_change else None,
+                    "중량0 금액효과" if item["상태"] == "대사조정" else "정상",
                 ])
-    summary_rows.sort(key=lambda row: abs(row[13] or 0), reverse=True)
+    summary_rows.sort(key=lambda row: (row[13] is not None, abs(row[13] or 0)), reverse=True)
     for rank, row in enumerate(summary_rows, 1): row[0] = rank
     _reset_table(workbook["원인탐색요약"], summary_rows, 29)
     _reset_table(workbook["원인탐색상세"], detail_rows, 35)
@@ -489,18 +582,61 @@ def _write_monthly_trend(workbook, mappings: list[Mapping], records: list[dict],
     worksheet.freeze_panes = "A4"
 
 
-def _write_validation(workbook, records: list[dict], sources: list[dict], target_year: int, target_month: int):
+def _write_validation(workbook, mappings: list[Mapping], records: list[dict], sources: list[dict], target_year: int, target_month: int):
     worksheet = workbook["검증"]
-    worksheet["A2"] = "MODEL STATUS"; worksheet["B2"] = "PASS"
     headers = ["연도", "원본행", "제외행", "가공행", "분석대상", "미매핑", "", "연도", "품질항목", "건수", "처리"]
     for column, header in enumerate(headers, 1): worksheet.cell(4, column).value = header
-    rows = []
+    overview = []
+    quality = []
     for year in (target_year - 1, target_year):
-        kept = sum(1 for item in records if item["연도"] == year)
         year_records = [item for item in records if item["연도"] == year]
-        source_rows = sum(1 for item in year_records)  # Raw source is kept in 가공데이터 only when mapped.
-        rows.append([year, source_rows, 0, kept, kept, 0, "", year, "음수중량", sum(1 for item in year_records if number(item["중량(톤)"]) < 0), "삭제하지 않고 플래그"])
+        year_sources = [item for item in sources if item["year"] == year]
+        source_rows = sum(item["source_rows"] for item in year_sources)
+        excluded = sum(item["excluded"] for item in year_sources)
+        unmapped = sum(item["unmapped"] for item in year_sources)
+        kept = sum(item["kept"] for item in year_sources)
+        overview.append([year, source_rows, excluded, source_rows - excluded, kept, unmapped])
+        checks = [
+            ("음수중량", sum(1 for item in year_records if number(item["중량(톤)"]) < 0)),
+            ("중량0", sum(1 for item in year_records if not number(item["중량(톤)"]))),
+            ("음수금액", sum(1 for item in year_records if number(item["분석금액"]) < 0)),
+            ("금액0", sum(1 for item in year_records if not number(item["분석금액"]))),
+            ("담당자없음", sum(1 for item in year_records if item["분석담당자"] == "담당자없음")),
+        ]
+        quality.extend([[year, label, count, "삭제하지 않고 플래그"] for label, count in checks])
+
+    effect_checks = effect_failures = effect_na = 0
+    for mapping in mappings:
+        for _, _, _, left_months, left_year, right_months, right_year in _comparison_specs(target_year, target_month):
+            baseline = _period_records(records, mapping.report_row, left_year, left_months)
+            compared = _period_records(records, mapping.report_row, right_year, right_months)
+            _, _, p0 = _metrics(baseline); _, _, p1 = _metrics(compared)
+            if p0 is None or p1 is None:
+                effect_na += 1
+                continue
+            effect_checks += 1
+            residual = sum(item["총단가기여도"] for item in _components(baseline, compared)) - (p1 - p0)
+            if abs(residual) > 1e-8:
+                effect_failures += 1
+    duplicate_count = sum(item["duplicate"] for item in sources)
+    model_rows = [
+        ["모델 점검", "건수", "판정", "비고"],
+        ["중복 매핑", duplicate_count, "PASS" if not duplicate_count else "WARN", "한 Raw 행이 여러 보고서행에 잡히는지 확인"],
+        ["효과 대사", effect_checks, "PASS" if not effect_failures else "WARN", f"불일치 {effect_failures}건"],
+        ["효과 N/A", effect_na, "INFO", "기준월 또는 비교월 전체판매 없음"],
+    ]
+    row_count = max(len(overview), len(quality), len(model_rows) + 1)
+    rows = []
+    for index in range(row_count):
+        left = overview[index] if index < len(overview) else ([None] * 6)
+        right = quality[index] if index < len(quality) else ([None] * 4)
+        rows.append([*left, "", *right])
+    rows.append([None] * 11)
+    for model_row in model_rows:
+        rows.append([*model_row, None, None, None, None, None, None, None])
     _reset_table(worksheet, rows, 11)
+    worksheet["A2"] = "MODEL STATUS"
+    worksheet["B2"] = "PASS" if not duplicate_count and not effect_failures else "WARN"
 
 
 def build_workbook(template: Path, raw_paths: list[Path], output: Path, target_year: int | None = None, target_month: int | None = None) -> Path:
@@ -524,7 +660,7 @@ def build_workbook(template: Path, raw_paths: list[Path], output: Path, target_y
     _write_yearly_scans(workbook, mappings, records, target_year, target_month)
     _write_cause_sheets(workbook, mappings, records, target_year, target_month)
     _write_monthly_trend(workbook, mappings, records, target_year, target_month)
-    _write_validation(workbook, records, sources, target_year, target_month)
+    _write_validation(workbook, mappings, records, sources, target_year, target_month)
     workbook["사용가이드"]["A1"] = f"제품판매단가 원인탐색용 | {target_year - 1}년·{target_year}년 1~{target_month}월 통합"
     workbook["사용가이드"]["A2"] = f"생성일시: {datetime.now():%Y-%m-%d %H:%M} | 누계 Raw 2개를 기준으로 자동 생성"
     workbook.save(output)
