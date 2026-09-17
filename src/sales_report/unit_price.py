@@ -19,6 +19,9 @@ from openpyxl import load_workbook
 from .utils import normalize_period, number, text
 
 
+BUILD_VERSION = "unit-price-v1.1.2"
+
+
 RAW_HEADERS = {
     "부문", "내수/수출", "요청월", "레벨1명", "레벨2명", "레벨3명", "계정",
     "중량", "달러금액", "한국원화금액",
@@ -693,4 +696,3 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-BUILD_VERSION = "unit-price-v1.1.1"
