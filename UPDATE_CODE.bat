@@ -3,6 +3,13 @@ chcp 65001 >nul
 setlocal
 cd /d "%~dp0"
 
+if not exist ".git" (
+    echo 이 폴더는 ZIP으로 내려받은 복사본이거나 GitHub Desktop 저장소가 아닙니다.
+    echo GitHub Desktop에서 Repository ^> Show in Explorer를 누른 뒤 그 폴더의 UPDATE_CODE를 실행해 주세요.
+    pause
+    exit /b 1
+)
+
 where git >nul 2>nul
 if errorlevel 1 (
     echo Git이 설치되어 있지 않습니다. GitHub Desktop에서 Fetch/Pull을 사용해 주세요.

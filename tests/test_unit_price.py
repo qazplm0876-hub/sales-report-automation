@@ -43,6 +43,7 @@ class UnitPriceWorkbookTests(unittest.TestCase):
             self.assertAlmostEqual(result["누계비교"].cell(5, 11).value, 2.0)
             self.assertAlmostEqual(result["누계비교"].cell(5, 12).value, 2.0)
             self.assertIn("1~8월", result["사용가이드"]["A1"].value)
+            self.assertIn("unit-price-v1.1.1", result["사용가이드"]["A2"].value)
 
     def test_missing_month_does_not_stop_generation(self):
         if not REFERENCE.exists():

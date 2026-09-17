@@ -662,7 +662,10 @@ def build_workbook(template: Path, raw_paths: list[Path], output: Path, target_y
     _write_monthly_trend(workbook, mappings, records, target_year, target_month)
     _write_validation(workbook, mappings, records, sources, target_year, target_month)
     workbook["사용가이드"]["A1"] = f"제품판매단가 원인탐색용 | {target_year - 1}년·{target_year}년 1~{target_month}월 통합"
-    workbook["사용가이드"]["A2"] = f"생성일시: {datetime.now():%Y-%m-%d %H:%M} | 누계 Raw 2개를 기준으로 자동 생성"
+    workbook["사용가이드"]["A2"] = (
+        f"생성일시: {datetime.now():%Y-%m-%d %H:%M} | 빌드: {BUILD_VERSION} | "
+        "누계 Raw 2개를 기준으로 자동 생성"
+    )
     workbook.save(output)
     return output
 
@@ -690,3 +693,4 @@ def main(argv=None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
+BUILD_VERSION = "unit-price-v1.1.1"
