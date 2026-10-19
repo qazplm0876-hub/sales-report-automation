@@ -395,7 +395,7 @@ def fill_section3(ws4, ws_hs, ws_st, ws_jg, wbov, df26, df25, month):
     m = month
     VINA = ['DSR VINA-현지내수','CABLE VINA-내수','CABLE VINA-수출']
     HS_LVL1_CD = ['합섬기타','합섬방사','합섬비방사','합섬웨빙','합섬특수']
-    JG_LVL1_CD = ['스틸로프','스틸상품']
+    JG_LVL1_CD = ['스틸로프','스틸선재','스틸상품']  # 섹션2 청도 판매량과 동일 범위
     JG_LVL1_VN = ['스틸로프','스틸선재']
 
     def s4(row, col, val): ws4.cell(row=row, column=col).value = round(float(val),6) if val else 0
