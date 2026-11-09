@@ -122,7 +122,10 @@ def run(args) -> tuple[Path, Path]:
     )
 
     recipient_datasets = load_recipient_datasets(manifest, target_period, config, official.metrics)
-    print(f"[4/6] 인수처 자료 확인: {len(manifest.recipient_files)}개 ({official.year - 1}년 6개 + {official.year}년 6개)")
+    recipient_file_count = len({candidate.path for candidate in manifest.recipient_files.values()})
+    print(f"[4/6] 인수처 자료 확인: 파일 {recipient_file_count}개 (6개 부문 × {official.year - 1}·{official.year}년)")
+    for note in manifest.notes:
+        print("참고: " + note)
     if manifest.ignored_files:
         print("참고: 분석 대상이 아닌 파일은 무시했습니다: " + ", ".join(path.name for path in manifest.ignored_files))
 

@@ -40,6 +40,8 @@ class RawSheetCandidate:
     sheet_name: str
     header_row: int
     headers: list[str]
+    # 합섬·스텐이 한 파일에 함께 있는 DSR 통합 파일은 LVL1NM 기준으로 이 부문 행만 사용한다.
+    company: str | None = None
 
 
 @dataclass
@@ -48,6 +50,7 @@ class InputManifest:
     cumulative_files: dict[int, RawSheetCandidate]
     recipient_files: dict[tuple[str, int], RawSheetCandidate]
     ignored_files: list[Path] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)
 
 
 @dataclass

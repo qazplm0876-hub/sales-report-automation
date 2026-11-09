@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import Counter, defaultdict
+from dataclasses import replace
 from math import log10
 from pathlib import Path
 from sys import intern
@@ -128,37 +129,76 @@ def _candidate_years(candidate: RawSheetCandidate, period_header: str) -> Counte
     return years
 
 
-def _classify_recipient(candidate: RawSheetCandidate) -> str:
+def _company_of(level1: str) -> str | None:
+    for prefix, company in COMPANY_PREFIXES.items():
+        if level1.startswith(prefix):
+            return company
+    return None
+
+
+DSR_COMPANIES = ("synthetic", "stainless")
+MIXED_FILE_MIN_SHARE = 0.05
+
+
+def _classify_recipient(
+    candidate: RawSheetCandidate,
+) -> tuple[list[tuple[str, RawSheetCandidate]], str | None, set[int]]:
+    """인수처 파일을 부문별 후보로 나눈다.
+
+    - 기존 분리형: 파일 하나가 부문 하나(예: 합섬 수출)이며 파일 전체 행을 그대로 사용한다.
+    - DSR 통합형: 합섬·스텐이 한 파일에 함께 있으면 LVL1NM 기준으로 부문별 행만 사용한다.
+      이때 같은 파일의 스틸 행(DSR 법인이 판매한 스틸상품 등)은 제강 실적이 아니므로 제외한다.
+    수출/내수는 파일 단위로 구분한다(달러금액이 있으면 수출).
+    파일을 한 번만 읽도록 출고요청년월 기준 연도도 함께 반환한다.
+    """
     workbook = load_workbook(candidate.path, read_only=True, data_only=True, keep_links=False)
     worksheet = workbook[candidate.sheet_name]
     index = {name: column for column, name in enumerate(candidate.headers) if name}
     company_counts: Counter[str] = Counter()
+    years: set[int] = set()
+    period_column = index["출고요청년월"]
     dollar_total = 0.0
     try:
         rows = worksheet.iter_rows(values_only=True)
         for _ in range(candidate.header_row):
             next(rows, None)
-        for row_number, row in enumerate(rows, 1):
-            lvl1 = text(row[index["LVL1NM"]] if index["LVL1NM"] < len(row) else None)
-            for prefix, company in COMPANY_PREFIXES.items():
-                if lvl1.startswith(prefix):
-                    company_counts[company] += 1
+        for row in rows:
+            period = normalize_period(row[period_column] if period_column < len(row) else None)
+            if len(period) == 6 and period.isdigit():
+                years.add(int(period[:4]))
+            company = _company_of(text(row[index["LVL1NM"]] if index["LVL1NM"] < len(row) else None))
+            if company:
+                company_counts[company] += 1
             dollar_total += abs(number(row[index["달러금액"]] if index["달러금액"] < len(row) else None))
-            if row_number >= 4000:
-                break
     finally:
         workbook.close()
     if not company_counts:
         raise ValueError(f"인수처 파일의 부문을 판별할 수 없습니다: {candidate.path.name}")
-    company = company_counts.most_common(1)[0][0]
     market = "export" if dollar_total > 0 else "domestic"
-    return f"{company}_{market}"
+
+    # 기존 분리형 파일에 다른 부문 행이 몇 건 섞여 있어도 통합형으로 오판하지 않도록 비중 기준을 둔다.
+    total_rows = sum(company_counts.values())
+    dsr_companies = [
+        company for company in DSR_COMPANIES if company_counts[company] >= total_rows * MIXED_FILE_MIN_SHARE
+    ]
+    if len(dsr_companies) >= 2:
+        segments = [(f"{company}_{market}", replace(candidate, company=company)) for company in dsr_companies]
+        note = None
+        if company_counts["steel"]:
+            note = (
+                f"{candidate.path.name}: DSR 통합 파일 안의 스틸 행 {company_counts['steel']}건은 "
+                "제강 인수처 분석에서 제외했습니다."
+            )
+        return segments, note, years
+    company = company_counts.most_common(1)[0][0]
+    return [(f"{company}_{market}", candidate)], None, years
 
 
 def discover_inputs(input_dir: Path, official_path: Path, target_year: int, config: dict) -> InputManifest:
     cumulative: dict[int, RawSheetCandidate] = {}
     recipients: dict[tuple[str, int], RawSheetCandidate] = {}
     ignored: list[Path] = []
+    notes: list[str] = []
     relevant_years = {target_year - 1, target_year}
 
     files = sorted(path for path in input_dir.glob("*.xlsx") if not path.name.startswith("~$") and path != official_path)
@@ -177,20 +217,24 @@ def discover_inputs(input_dir: Path, official_path: Path, target_year: int, conf
 
         recipient_candidate = _find_header(path, RECIPIENT_REQUIRED_HEADERS, "출고요청년월", relevant_years)
         if recipient_candidate:
-            segment = _classify_recipient(recipient_candidate)
-            if segment not in config["segments"]:
+            segments, note, file_years = _classify_recipient(recipient_candidate)
+            segments = [(segment, candidate) for segment, candidate in segments if segment in config["segments"]]
+            if not segments:
                 ignored.append(path)
                 continue
-            years = set(_candidate_years(recipient_candidate, "출고요청년월")) & relevant_years
+            years = file_years & relevant_years
             if not years:
                 ignored.append(path)
                 continue
-            for year in years:
-                key = (segment, year)
-                if key in recipients and recipients[key].path != path:
-                    label = config["segments"][segment]["label"]
-                    raise ValueError(f"{year}년 {label} 인수처 파일이 2개 이상입니다: {recipients[key].path.name}, {path.name}")
-                recipients[key] = recipient_candidate
+            if note:
+                notes.append(note)
+            for segment, candidate in segments:
+                for year in years:
+                    key = (segment, year)
+                    if key in recipients and recipients[key].path != path:
+                        label = config["segments"][segment]["label"]
+                        raise ValueError(f"{year}년 {label} 인수처 파일이 2개 이상입니다: {recipients[key].path.name}, {path.name}")
+                    recipients[key] = candidate
             continue
 
         ignored.append(path)
@@ -207,7 +251,7 @@ def discover_inputs(input_dir: Path, official_path: Path, target_year: int, conf
     if missing_recipients:
         raise ValueError("다음 인수처 파일이 없습니다: " + ", ".join(missing_recipients))
 
-    return InputManifest(official_path, cumulative, recipients, ignored)
+    return InputManifest(official_path, cumulative, recipients, ignored, notes)
 
 
 def _cell(row, index: dict[str, int], name: str):
@@ -403,6 +447,8 @@ def load_recipient_datasets(
                     if text(_cell(raw, index, "계정")) in excluded_accounts:
                         continue
                     level1 = text(_cell(raw, index, "LVL1NM"))
+                    if candidate.company and _company_of(level1) != candidate.company:
+                        continue
                     level2 = text(_cell(raw, index, "LVL2NM"))
                     level3 = text(_cell(raw, index, "LVL3NM"))
                     item_code_2 = text(_cell(raw, index, "품번2"))

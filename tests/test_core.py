@@ -10,6 +10,7 @@ from sales_report.cli import resolve_input_dir
 from sales_report.input_loader import (
     CUMULATIVE_REQUIRED_HEADERS,
     RECIPIENT_REQUIRED_HEADERS,
+    _classify_recipient,
     _find_header,
     _normalize_recipient_name,
     _unit_divisors,
@@ -158,6 +159,58 @@ class RecipientExclusionTests(unittest.TestCase):
             self.assertEqual({row["secondary"] for row in rows}, {"SR1"})
             self.assertEqual(len(rows), 2)
             self.assertTrue(all(row["weight"] == 2.0 for row in rows))
+
+
+class MixedDsrRecipientFileTests(unittest.TestCase):
+    HEADERS = [
+        "출고요청년월", "LVL1NM", "LVL2NM", "LVL3NM", "계정",
+        "중량(Kg)", "원화금액", "달러금액", "거래처", "인수처명",
+    ]
+
+    def _write(self, path: Path, rows: list[list]):
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.append(self.HEADERS)
+        for row in rows:
+            worksheet.append(row)
+        workbook.save(path)
+        return RawSheetCandidate(path, worksheet.title, 1, list(self.HEADERS))
+
+    def test_dsr_export_file_is_split_into_synthetic_and_stainless(self):
+        config = load_config(ROOT / "config" / "analysis_rules.yaml")
+        config["report_order"] = ["synthetic_export", "stainless_export"]
+        rows = []
+        for year in (2025, 2026):
+            rows += [
+                [f"{year}07", "합섬방사", "PP-8", "PP-8", 1, 1_000, 1_400_000, 1_000, "A", "합섬고객"],
+                [f"{year}07", "합섬웨빙", "웨빙", "웨빙", 1, 1_000, 1_400_000, 1_000, "A", "합섬고객"],
+                [f"{year}07", "스텐선재", "WIRE", "WIRE", 1, 2_000, 2_800_000, 2_000, "B", "스텐고객"],
+                [f"{year}07", "스텐로프", "ROPE", "ROPE", 1, 2_000, 2_800_000, 2_000, "B", "스텐고객"],
+            ]
+        rows.append(["202507", "스틸상품", "상품", "상품", 1, 0, 140_000, 100, "C", "스틸고객"])
+        with TemporaryDirectory() as temp:
+            candidate = self._write(Path(temp) / "DSR 수출.xlsx", rows)
+            segments, note, years = _classify_recipient(candidate)
+            self.assertEqual([segment for segment, _ in segments], ["synthetic_export", "stainless_export"])
+            self.assertEqual(years, {2025, 2026})
+            self.assertIn("스틸 행 1건", note)
+
+            recipients = {(segment, year): item for segment, item in segments for year in (2025, 2026)}
+            manifest = InputManifest(Path(temp) / "official.xlsx", {}, recipients)
+            datasets = load_recipient_datasets(manifest, "202607", config)
+            self.assertEqual({row["recipient_name"] for row in datasets["synthetic_export"].rows}, {"합섬고객"})
+            self.assertEqual({row["recipient_name"] for row in datasets["stainless_export"].rows}, {"스텐고객"})
+            self.assertEqual(len(datasets["synthetic_export"].rows), 4)
+            self.assertEqual(len(datasets["stainless_export"].rows), 4)
+
+    def test_separate_file_with_few_other_rows_is_not_split(self):
+        rows = [["202607", "스텐선재", "WIRE", "WIRE", 1, 1_000, 1_000_000, 0, "B", "스텐고객"] for _ in range(40)]
+        rows.append(["202607", "합섬방사", "PP-8", "PP-8", 1, 1_000, 1_000_000, 0, "A", "합섬고객"])
+        with TemporaryDirectory() as temp:
+            candidate = self._write(Path(temp) / "2_내수.xlsx", rows)
+            segments, note, _ = _classify_recipient(candidate)
+            self.assertEqual([(segment, item.company) for segment, item in segments], [("stainless_domestic", None)])
+            self.assertIsNone(note)
 
 
 class RecipientInputRobustnessTests(unittest.TestCase):
